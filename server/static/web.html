@@ -14,16 +14,34 @@
     --ok: #4ade80; --warn: #fbbf24; --err: #ff6b6b; --violet: #a78bfa; --pink: #f472b6;
     --shadow: 0 6px 24px rgba(0,0,0,.35);
     --radius: 12px;
+    --bg-glow: #14233a;
+    --header-bg: rgba(13,16,23,.85);
+    --hover-bg: rgba(76,194,255,.05);
+    --msg-user-bg: #1e2a3a; --msg-assistant-bg: #18202c; --msg-tool-bg: #232a36;
+  }
+  /* 亮色主题：html[data-theme="light"] 时生效（默认/暗色使用上方 :root） */
+  html[data-theme="light"] {
+    --bg: #f5f7fa; --bg-2: #e9edf3; --panel: #ffffff; --panel-2: #f1f4f9;
+    --border: #dde3ec; --border-2: #c3cddb;
+    --text: #1c2430; --muted: #5a6a7d; --dim: #8b98a9;
+    --accent: #0f8fd9; --accent-2: #5b7cf8; --accent-dim: #bcdff4;
+    --ok: #16a34a; --warn: #d97706; --err: #dc2626; --violet: #7c5cd6; --pink: #d4559b;
+    --shadow: 0 6px 24px rgba(20,30,50,.10);
+    --bg-glow: #dcebf7;
+    --header-bg: rgba(255,255,255,.88);
+    --hover-bg: rgba(15,143,217,.06);
+    --msg-user-bg: #e4eef8; --msg-assistant-bg: #eef1f6; --msg-tool-bg: #f4eee3;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { color-scheme: dark; }
-  body { background: radial-gradient(1200px 500px at 20% -10%, #14233a 0%, var(--bg) 55%); background-attachment: fixed; color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; min-height: 100vh; }
+  html[data-theme="light"] { color-scheme: light; }
+  body { background: radial-gradient(1200px 500px at 20% -10%, var(--bg-glow) 0%, var(--bg) 55%); background-attachment: fixed; color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; min-height: 100vh; }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-thumb { background: #2b3548; border-radius: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
 
   /* ---------- header ---------- */
-  header { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; position: sticky; top: 0; background: rgba(13,16,23,.85); backdrop-filter: blur(8px); z-index: 20; }
+  header { padding: 14px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; position: sticky; top: 0; background: var(--header-bg); backdrop-filter: blur(8px); z-index: 20; }
   .brand { display: flex; align-items: center; gap: 10px; }
   .logo { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--violet)); display: flex; align-items: center; justify-content: center; font-size: 15px; box-shadow: 0 0 14px rgba(76,194,255,.35); }
   header h1 { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
@@ -46,6 +64,7 @@
   .chip { border: none; background: transparent; color: var(--muted); padding: 5px 13px; border-radius: 7px; font-size: 12.5px; cursor: pointer; transition: all .15s ease; }
   .chip:hover { color: var(--text); }
   .chip.active { background: linear-gradient(135deg, var(--accent-dim), #16405c); color: #dff3ff; font-weight: 600; box-shadow: 0 2px 8px rgba(76,194,255,.25); }
+  html[data-theme="light"] .chip.active { color: #0b5f8f; box-shadow: 0 2px 8px rgba(15,143,217,.18); }
   select { background: var(--bg-2); border: 1px solid var(--border-2); color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; outline: none; }
   select:hover { border-color: var(--accent-dim); }
   .auto-refresh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
@@ -53,6 +72,7 @@
   .btn { background: var(--bg-2); border: 1px solid var(--border-2); color: var(--text); border-radius: 8px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; transition: all .15s ease; }
   .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn.primary { background: linear-gradient(135deg, var(--accent-dim), #16405c); border-color: var(--accent-dim); color: #dff3ff; font-weight: 600; }
+  html[data-theme="light"] .btn.primary { color: #0b5f8f; }
 
   /* ---------- stat cards ---------- */
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
@@ -75,6 +95,7 @@
   .seg { display: flex; gap: 3px; background: var(--bg-2); padding: 2px; border-radius: 8px; }
   .seg button { border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all .15s ease; }
   .seg button.active { background: var(--accent-dim); color: #dff3ff; font-weight: 600; }
+  html[data-theme="light"] .seg button.active { color: #0b5f8f; }
   .empty-state { color: var(--dim); text-align: center; padding: 36px 10px; font-size: 13px; }
   .loading { text-align: center; padding: 30px; color: var(--muted); }
   .loading .spin { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--border-2); border-top-color: var(--accent); border-radius: 50%; animation: rot .8s linear infinite; vertical-align: -4px; margin-right: 8px; }
@@ -109,7 +130,7 @@
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; }
   th { color: var(--muted); font-weight: 500; background: var(--bg-2); position: sticky; top: 0; }
   td.num, th.num { text-align: right; }
-  tr:hover td { background: rgba(76,194,255,.04); }
+  tr:hover td { background: var(--hover-bg); }
   .cost-cell { color: var(--warn); }
   .tok-cell { color: var(--accent); }
   .breakdown { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -120,7 +141,7 @@
   .recent-list { display: flex; flex-direction: column; }
   .recent-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; cursor: pointer; transition: background .15s ease; border-bottom: 1px solid var(--border); }
   .recent-item:last-child { border-bottom: none; }
-  .recent-item:hover { background: rgba(76,194,255,.06); }
+  .recent-item:hover { background: var(--hover-bg); }
   .recent-item .icon { width: 30px; height: 30px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
   .recent-item .t { flex: 1; min-width: 0; }
   .recent-item .t .name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -136,20 +157,24 @@
   .sess-table { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
   .sess-table th, .sess-table td { padding: 10px 14px; }
   tr.clickable { cursor: pointer; }
-  tr.clickable:hover td { background: rgba(76,194,255,.05); }
-  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; background: var(--accent-dim); color: #cfeaff; }
+  tr.clickable:hover td { background: var(--hover-bg); }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; background: var(--accent-dim); color: var(--accent); }
   .badge.deleted { background: #3a2226; color: var(--err); }
   .badge.ok { background: #16331f; color: var(--ok); }
+  html[data-theme="light"] .badge.deleted { background: #fde8e8; }
+  html[data-theme="light"] .badge.ok { background: #e4f5e9; }
   .back { margin-bottom: 12px; }
   .sess-head { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--shadow); }
   .sess-head h2 { font-size: 15px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .msg { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; background: var(--panel); }
   .msg-head { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  .msg.role-user .msg-head { background: #1e2a3a; }
-  .msg.role-assistant .msg-head { background: #18202c; }
-  .msg.role-toolResult .msg-head, .msg.type-tool .msg-head { background: #232a36; }
+  .msg.role-user .msg-head { background: var(--msg-user-bg); }
+  .msg.role-assistant .msg-head { background: var(--msg-assistant-bg); }
+  .msg.role-toolResult .msg-head, .msg.type-tool .msg-head { background: var(--msg-tool-bg); }
   .msg-body { padding: 10px 14px; white-space: pre-wrap; word-break: break-word; font-size: 13px; color: #c9d3e2; }
   .msg.role-assistant .msg-body { color: #dbe2ec; }
+  html[data-theme="light"] .msg-body { color: #333c4b; }
+  html[data-theme="light"] .msg.role-assistant .msg-body { color: #1c2430; }
   .msg.type-compaction, .msg.type-branch_summary { border-left: 3px solid var(--warn); }
   .msg.type-compaction .msg-body, .msg.type-branch_summary .msg-body { color: var(--muted); font-style: italic; }
   .role-tag { font-weight: 600; }
@@ -184,19 +209,25 @@
     </div>
   </div>
   <div class="spacer"></div>
+  <select id="themeSelect" title="主题：跟随系统 / 亮色 / 暗色">
+    <option value="system">🌓 跟随系统</option>
+    <option value="light">☀️ 亮色</option>
+    <option value="dark">🌙 暗色</option>
+  </select>
   <button id="btnRefresh" class="btn hidden">⟳ 刷新</button>
   <button id="btnLogout" class="btn hidden">切换令牌</button>
 </header>
 
+<!-- 令牌输入（独立于 #app：切换令牌时不再被主界面隐藏） -->
+<div id="tokenPrompt" class="token-prompt hidden">
+  <div class="logo">☁</div>
+  <h2 id="tokenTitle">输入访问令牌</h2>
+  <p class="muted">Token 仅保存在本浏览器 localStorage，不会上传到别处。</p>
+  <input type="password" id="tokenInput" placeholder="访问令牌 (SYNC_TOKEN)" autocomplete="off">
+  <button class="btn primary" id="btnToken" style="width:100%">连接</button>
+</div>
+
 <main id="app" class="hidden">
-  <!-- 令牌输入 -->
-  <div id="tokenPrompt" class="token-prompt hidden">
-    <div class="logo">☁</div>
-    <h2>输入访问令牌</h2>
-    <p class="muted">Token 仅保存在本浏览器 localStorage，不会上传到别处。</p>
-    <input type="password" id="tokenInput" placeholder="访问令牌 (SYNC_TOKEN)" autocomplete="off">
-    <button class="btn primary" id="btnToken" style="width:100%">连接</button>
-  </div>
 
   <nav class="tabs" id="tabs">
     <button class="tab active" data-tab="overview">📊 用量总览</button>
@@ -322,6 +353,23 @@
     return j.data;
   }
 
+  /* ---------- theme ---------- */
+  const THEME_KEY = 'pisync_theme';
+  const mqDark = window.matchMedia('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const saved = localStorage.getItem(THEME_KEY) || 'system';
+    const dark = saved === 'dark' || (saved === 'system' && mqDark.matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    $('themeSelect').value = saved;
+  }
+  $('themeSelect').onchange = (e) => {
+    localStorage.setItem(THEME_KEY, e.target.value);
+    applyTheme();
+  };
+  // 跟随系统时监听系统主题变化
+  if (mqDark.addEventListener) mqDark.addEventListener('change', applyTheme);
+  applyTheme();
+
   /* ---------- init ---------- */
   function init() {
     $('serverLabel').textContent = serverOrigin;
@@ -348,7 +396,7 @@
       await refreshAll();
     } catch (e) {
       localStorage.removeItem('pisync_token');
-      $('tokenPrompt').querySelector('h2').textContent = e.status === 401 ? '令牌无效，请重新输入' : '连接失败：' + e.message;
+      $('tokenTitle').textContent = e.status === 401 ? '令牌无效，请重新输入' : '连接失败：' + e.message;
       showTokenPrompt();
     }
   }

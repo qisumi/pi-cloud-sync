@@ -285,7 +285,7 @@ export function searchLocalSessions(query: string): LocalSession[] {
   });
 }
 
-/** 供 /sync find 使用：本地 + 已拉取快照去重后的会话列表 */
+/** 供 /qisumi-sync-find 使用：本地 + 已拉取快照去重后的会话列表 */
 export function localSessionsIndex(): Array<{
   uuid: string;
   name: string | null;

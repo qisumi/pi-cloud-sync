@@ -33,7 +33,7 @@
 - 服务器判断：
   - `baseSha256 == server.sha256` → 快速前进（fast-forward），直接应用。
   - 否则 → 并发修改：逐字段比较 `fieldVersion`，版本高者胜出（field-level LWW）；双方都改过且版本相同但值不同 → 记录为冲突，等待用户解决。
-- 失败方内容保留在 `conflicts` 表中，可通过 `/sync conflicts` 查看和解决。
+- 失败方内容保留在 `conflicts` 表中，可通过 `/qisumi-sync-conflicts` 查看和解决。
 
 ### 非 JSON 文件
 
@@ -55,7 +55,7 @@
 ## 同步触发
 
 - 自动：`session_start` 时自动 pull（可配置），`session_shutdown` 时自动 push。
-- 手动：`/sync push`、`/sync pull`、`/sync now`。
+- 手动：`/qisumi-sync-push`、`/qisumi-sync-pull`、`/qisumi-sync-now`。
 
 ## 统计功能
 

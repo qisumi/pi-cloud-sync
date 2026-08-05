@@ -90,11 +90,11 @@ pi -e ./extension/src/index.ts
 
 ```bash
 # 交互式配置（服务器地址、令牌、设备名、自动同步开关）
-/sync config
+/qisumi-sync-config
 
 # 或命令行 / or CLI
-/sync config import https://sync.example.com <TOKEN>
-/sync config set deviceName my-laptop
+/qisumi-sync-config-import https://sync.example.com <TOKEN>
+/qisumi-sync-config-set deviceName my-laptop
 ```
 
 配置保存在 `~/.pi/agent/pi-sync.json`：
@@ -118,16 +118,24 @@ pi -e ./extension/src/index.ts
 
 ### 4. Sync / 同步
 
+所有命令以 `/qisumi-sync-` 开头，输入 `/qisumi-` 可自动补全：
+
 ```bash
-/sync now          # 完整同步（先拉后推）full sync
-/sync push         # 推送本地变更 push local changes
-/sync pull         # 拉取远端变更 pull remote changes
-/sync status       # 查看状态 view status
-/sync conflicts    # 查看冲突 view conflicts
-/sync conflicts resolve 3 keep-b   # 解决冲突 resolve conflict
-/sync devices      # 设备列表 list devices
-/sync find <query> # 跨项目搜索会话 search sessions across projects
-/sync restore <uuid>  # 恢复已删除会话 restore deleted session
+/qisumi-sync-now        # 完整同步（先拉后推）full sync
+/qisumi-sync-push       # 推送本地变更 push local changes
+/qisumi-sync-pull       # 拉取远端变更 pull remote changes
+/qisumi-sync-status     # 查看状态 view status
+/qisumi-sync            # 状态（同 status）；help 查看子命令列表
+/qisumi-sync-conflicts  # 查看冲突 view conflicts
+/qisumi-sync-conflicts-resolve 3 keep-b   # 解决冲突 resolve conflict
+/qisumi-sync-devices    # 设备列表 list devices
+/qisumi-sync-find <query> # 跨项目搜索会话 search sessions across projects
+/qisumi-sync-list       # 列出本地会话
+/qisumi-sync-restore <uuid>  # 恢复已删除会话 restore deleted session
+/qisumi-sync-config-show    # 查看配置
+/qisumi-sync-config-set <key> <value>  # 设置配置项
+/qisumi-sync-config-import <url> <token>  # 导入服务器配置
+/qisumi-sync-config-reset   # 清除服务器配置
 ```
 
 ### 5. Web dashboard / 网页看板
@@ -165,16 +173,16 @@ pi -e ./extension/src/index.ts
 USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchangerate-api.com) 实时汇率**（6 小时缓存），失败回退配置 `stats.usdCnyRate`（默认 6.76）。
 
 ```bash
-/usage                # 默认：近 7 天 · 分日 + 分模型两表 · 非交互直接展示
-/usage full           # 完整视图：概要 + 按天 + 按模型 + 按会话 Top
-/usage current        # 当前会话明细
-/usage 30d            # 近 30 天（today / 7d / 30d / all / Nd）
-/usage --cny          # 人民币 ¥ 显示（默认）  /usage --usd 美元 $ 显示
-/usage --json         # JSON 导出
-/usage --csv          # CSV 导出
-/usage --md           # Markdown 导出
-/usage --save=report.md --top=20
-/usage live           # 开关实时采集
+/qisumi-usage            # 默认：近 7 天 · 分日 + 分模型两表 · 非交互直接展示
+/qisumi-usage full       # 完整视图：概要 + 按天 + 按模型 + 按会话 Top
+/qisumi-usage current    # 当前会话明细
+/qisumi-usage 30d        # 近 30 天（today / 7d / 30d / all / Nd）
+/qisumi-usage --cny      # 人民币 ¥ 显示（默认）  --usd 美元 $ 显示
+/qisumi-usage --json     # JSON 导出
+/qisumi-usage --csv      # CSV 导出
+/qisumi-usage --md       # Markdown 导出
+/qisumi-usage --save=report.md --top=20
+/qisumi-usage live       # 开关实时采集
 ```
 
 ```
@@ -204,8 +212,8 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 与上次探测的消耗对比）。快照记录在本地 `~/.pi/agent/pi-quota.jsonl`。
 
 ```bash
-/quota               # 探测全部渠道（TUI 面板展示）
-/quota --json        # 输出 JSON（供脚本/自动化）
+/qisumi-quota         # 探测全部渠道（TUI 面板展示）
+/qisumi-quota --json  # 输出 JSON（供脚本/自动化）
 ```
 
 支持渠道与凭据来源：

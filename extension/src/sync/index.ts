@@ -122,7 +122,7 @@ export async function push(
       }
       report.conflicts += res.conflicts.length;
       if (res.conflicts.length > 0) {
-        report.errors.push(`${res.conflicts.length} conflict(s) recorded — run /sync conflicts to review`);
+        report.errors.push(`${res.conflicts.length} conflict(s) recorded — run /qisumi-sync-conflicts to review`);
       }
     } catch (err) {
       report.errors.push(`push objects failed: ${(err as Error).message}`);

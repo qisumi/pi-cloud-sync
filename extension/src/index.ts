@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import type { SyncConfig } from "./config.js";
 import {
   loadConfig,
@@ -45,171 +46,158 @@ function fmtPulled(r: { pulled: { objects: number; sessions: number; entries: nu
 
 /* ============================ 命令 ============================ */
 
-async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<string> {
-  const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+/** 服务器未配置提示 */
+function requireServer(): string | null {
+  if (!serverConfigured()) return "服务器未配置：运行 /qisumi-sync-config-import <url> <token>";
+  return null;
+}
 
-  if (!sub || sub === "status") return syncStatus(ctx);
+async function cmdSyncPush(ctx: ExtensionCommandContext): Promise<string> {
+  const unconf = requireServer();
+  if (unconf) return unconf;
+  const progress = startProgress(ctx, "正在推送变更到服务器…");
+  const c = client();
+  const report = await push(cfg, loadState(), c, "0.83.0", EXT_VERSION, (m) => progress?.set(m));
+  if (report.errors.length > 0) {
+    progress?.error(`推送失败：${report.errors[0]}`);
+    return `推送完成（部分失败）\n${report.errors.join("\n")}`;
+  }
+  progress?.done();
+  return `推送完成: ${fmtPushed(report)}${report.conflicts ? `, ${report.conflicts} 个冲突` : ""}`;
+}
 
-  if (sub === "push") {
-    if (!serverConfigured()) return "服务器未配置：运行 /sync config";
-    const progress = startProgress(ctx, "正在推送变更到服务器…");
-    const c = client();
-    const report = await push(cfg, loadState(), c, "0.83.0", EXT_VERSION, (m) => progress?.set(m));
-    if (report.errors.length > 0) {
-      progress?.error(`推送失败：${report.errors[0]}`);
-      return `推送完成（部分失败）\n${report.errors.join("\n")}`;
+async function cmdSyncPull(ctx: ExtensionCommandContext): Promise<string> {
+  const unconf = requireServer();
+  if (unconf) return unconf;
+  const progress = startProgress(ctx, "正在从服务器拉取变更…");
+  const c = client();
+  const report = await pull(cfg, loadState(), c, {
+    skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
+    piExec: (args) => piExec(args),
+    onStage: (m) => progress?.set(m),
+  });
+  if (report.errors.length > 0) {
+    progress?.error(`拉取失败：${report.errors[0]}`);
+    return `拉取完成（部分失败）\n${report.errors.join("\n")}`;
+  }
+  progress?.done();
+  return `拉取完成: ${fmtPulled(report)}${report.conflicts ? `, ${report.conflicts} 个冲突` : ""}`;
+}
+
+async function cmdSyncNow(ctx: ExtensionCommandContext): Promise<string> {
+  const unconf = requireServer();
+  if (unconf) return unconf;
+  const progress = startProgress(ctx, "正在同步（先拉后推）…");
+  const c = client();
+  const { pullReport, pushReport } = await syncNow(cfg, c, "0.83.0", EXT_VERSION, {
+    skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
+    piExec: (args) => piExec(args),
+    onStage: (m) => progress?.set(m),
+  });
+  const errs = [...pullReport.errors, ...pushReport.errors];
+  const lines = [
+    `拉取: ${fmtPulled(pullReport)}`,
+    `推送: ${fmtPushed(pushReport)}`,
+    `冲突: ${pullReport.conflicts + pushReport.conflicts}`,
+  ];
+  if (errs.length > 0) {
+    progress?.error(`同步失败：${errs[0]}`);
+    lines.push("错误: " + errs.join("; "));
+  } else {
+    progress?.done();
+  }
+  return lines.join("\n");
+}
+
+async function cmdSyncConflicts(ctx: ExtensionCommandContext): Promise<string> {
+  const progress = startProgress(ctx, "正在获取冲突列表…");
+  try {
+    const conflicts = await client().listConflicts();
+    if (conflicts.length === 0) {
+      progress?.done();
+      return "没有冲突记录 🎉";
     }
     progress?.done();
-    return `推送完成: ${fmtPushed(report)}${report.conflicts ? `, ${report.conflicts} 个冲突` : ""}`;
-  }
-
-  if (sub === "pull") {
-    if (!serverConfigured()) return "服务器未配置：运行 /sync config";
-    const progress = startProgress(ctx, "正在从服务器拉取变更…");
-    const c = client();
-    const report = await pull(cfg, loadState(), c, {
-      skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
-      piExec: (args) => piExec(args),
-      onStage: (m) => progress?.set(m),
-    });
-    if (report.errors.length > 0) {
-      progress?.error(`拉取失败：${report.errors[0]}`);
-      return `拉取完成（部分失败）\n${report.errors.join("\n")}`;
-    }
-    progress?.done();
-    return `拉取完成: ${fmtPulled(report)}${report.conflicts ? `, ${report.conflicts} 个冲突` : ""}`;
-  }
-
-  if (sub === "now") {
-    if (!serverConfigured()) return "服务器未配置：运行 /sync config";
-    const progress = startProgress(ctx, "正在同步（先拉后推）…");
-    const c = client();
-    const { pullReport, pushReport } = await syncNow(cfg, c, "0.83.0", EXT_VERSION, {
-      skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
-      piExec: (args) => piExec(args),
-      onStage: (m) => progress?.set(m),
-    });
-    const errs = [...pullReport.errors, ...pushReport.errors];
-    const lines = [
-      `拉取: ${fmtPulled(pullReport)}`,
-      `推送: ${fmtPushed(pushReport)}`,
-      `冲突: ${pullReport.conflicts + pushReport.conflicts}`,
-    ];
-    if (errs.length > 0) {
-      progress?.error(`同步失败：${errs[0]}`);
-      lines.push("错误: " + errs.join("; "));
-    } else {
-      progress?.done();
-    }
-    return lines.join("\n");
-  }
-
-  if (sub === "conflicts") {
-    const action = rest[0];
-    if (action === "resolve") {
-      const id = parseInt(rest[1] ?? "", 10);
-      const how = (rest[2] ?? "keep-b") as "keep-a" | "keep-b";
-      if (Number.isNaN(id)) return "用法: /sync conflicts resolve <id> keep-a|keep-b";
-      const progress = startProgress(ctx, `正在解决冲突 #${id}…`);
-      try {
-        await resolveConflict(cfg, client(), id, how);
-        progress?.done();
-        return `冲突 #${id} 已解决（${how}），已重新拉取。`;
-      } catch (err) {
-        progress?.error(`解决失败：${(err as Error).message}`);
-        return `解决失败: ${(err as Error).message}`;
-      }
-    }
-    const progress = startProgress(ctx, "正在获取冲突列表…");
-    try {
-      const conflicts = await client().listConflicts();
-      if (conflicts.length === 0) {
-        progress?.done();
-        return "没有冲突记录 🎉";
-      }
-      progress?.done();
-      return (
-        `共 ${conflicts.length} 个冲突（未解决 ${conflicts.filter((c) => !c.resolvedAt).length}）:\n` +
-        conflicts
-          .map(
-            (c) =>
-              `#${c.id} [${c.resolvedAt ? "已解决" : "未解决"}] ${c.objectKey} @${c.path}\n` +
-              `  ${c.deviceA} vs ${c.deviceB}\n` +
-              `  A: ${preview(c.contentA)}\n  B: ${preview(c.contentB)}`,
-          )
-          .join("\n") +
-        "\n解决: /sync conflicts resolve <id> keep-a|keep-b"
-      );
-    } catch (err) {
-      progress?.error(`获取冲突失败：${(err as Error).message}`);
-      return `获取冲突失败: ${(err as Error).message}`;
-    }
-  }
-
-  if (sub === "devices") {
-    const progress = startProgress(ctx, "正在获取设备列表…");
-    try {
-      const devices = await client().listDevices();
-      if (devices.length === 0) {
-        progress?.done();
-        return "暂无设备记录";
-      }
-      progress?.done();
-      return devices
+    return (
+      `共 ${conflicts.length} 个冲突（未解决 ${conflicts.filter((c) => !c.resolvedAt).length}）:\n` +
+      conflicts
         .map(
-          (d) =>
-            `• ${d.name}  (${d.platform}, pi ${d.piVersion})  上次在线: ${new Date(d.lastSeen).toLocaleString()}`,
+          (c) =>
+            `#${c.id} [${c.resolvedAt ? "已解决" : "未解决"}] ${c.objectKey} @${c.path}\n` +
+            `  ${c.deviceA} vs ${c.deviceB}\n` +
+            `  A: ${preview(c.contentA)}\n  B: ${preview(c.contentB)}`,
         )
-        .join("\n");
-    } catch (err) {
-      progress?.error(`获取设备列表失败：${(err as Error).message}`);
-      return `获取设备列表失败: ${(err as Error).message}`;
+        .join("\n") +
+      "\n解决: /qisumi-sync-conflicts-resolve <id> keep-a|keep-b"
+    );
+  } catch (err) {
+    progress?.error(`获取冲突失败：${(err as Error).message}`);
+    return `获取冲突失败: ${(err as Error).message}`;
+  }
+}
+
+async function cmdSyncConflictResolve(args: string, ctx: ExtensionCommandContext): Promise<string> {
+  const [idRaw, howRaw] = args.trim().split(/\s+/);
+  const id = parseInt(idRaw ?? "", 10);
+  const how = (howRaw ?? "keep-b") as "keep-a" | "keep-b";
+  if (Number.isNaN(id)) return "用法: /qisumi-sync-conflicts-resolve <id> keep-a|keep-b";
+  const progress = startProgress(ctx, `正在解决冲突 #${id}…`);
+  try {
+    await resolveConflict(cfg, client(), id, how);
+    progress?.done();
+    return `冲突 #${id} 已解决（${how}），已重新拉取。`;
+  } catch (err) {
+    progress?.error(`解决失败：${(err as Error).message}`);
+    return `解决失败: ${(err as Error).message}`;
+  }
+}
+
+async function cmdSyncDevices(ctx: ExtensionCommandContext): Promise<string> {
+  const progress = startProgress(ctx, "正在获取设备列表…");
+  try {
+    const devices = await client().listDevices();
+    if (devices.length === 0) {
+      progress?.done();
+      return "暂无设备记录";
     }
-  }
-
-  if (sub === "find") {
-    const query = rest.join(" ");
-    const sessions = searchLocalSessions(query);
-    if (sessions.length === 0) return "未找到匹配的会话";
-    return sessions
-      .map((s) => `• ${s.name ?? s.uuid}  (${s.entries.length} entries)\n  cwd: ${s.cwd}\n  uuid: ${s.uuid}`)
+    progress?.done();
+    return devices
+      .map(
+        (d) =>
+          `• ${d.name}  (${d.platform}, pi ${d.piVersion})  上次在线: ${new Date(d.lastSeen).toLocaleString()}`,
+      )
       .join("\n");
+  } catch (err) {
+    progress?.error(`获取设备列表失败：${(err as Error).message}`);
+    return `获取设备列表失败: ${(err as Error).message}`;
   }
+}
 
-  if (sub === "restore") {
-    const uuid = rest[0];
-    if (!uuid) return "用法: /sync restore <session-uuid>";
-    try {
-      const ok = await client().restoreSession(uuid);
-      return ok ? `会话 ${uuid} 已恢复（清除删除标记）。` : `未找到会话 ${uuid}`;
-    } catch (err) {
-      return `恢复失败: ${(err as Error).message}`;
-    }
+function cmdSyncFind(args: string): string {
+  const query = args.trim();
+  if (!query) return "用法: /qisumi-sync-find <关键词>";
+  const sessions = searchLocalSessions(query);
+  if (sessions.length === 0) return "未找到匹配的会话";
+  return sessions
+    .map((s) => `• ${s.name ?? s.uuid}  (${s.entries.length} entries)\n  cwd: ${s.cwd}\n  uuid: ${s.uuid}`)
+    .join("\n");
+}
+
+async function cmdSyncRestore(args: string): Promise<string> {
+  const uuid = args.trim().split(/\s+/)[0] ?? "";
+  if (!uuid) return "用法: /qisumi-sync-restore <session-uuid>";
+  try {
+    const ok = await client().restoreSession(uuid);
+    return ok ? `会话 ${uuid} 已恢复（清除删除标记）。` : `未找到会话 ${uuid}`;
+  } catch (err) {
+    return `恢复失败: ${(err as Error).message}`;
   }
+}
 
-  if (sub === "list") {
-    const sessions = localSessionsIndex();
-    if (sessions.length === 0) return "本地没有会话";
-    return sessions
-      .map((s) => `• ${s.name ?? s.uuid}  (${s.entryCount} entries) — ${s.cwd}`)
-      .join("\n");
-  }
-
-  if (sub === "config") return cmdSyncConfig(rest, ctx);
-
-  return [
-    "用法: /sync <subcommand>",
-    "  status     查看同步状态",
-    "  push       推送本地变更",
-    "  pull       拉取远端变更",
-    "  now        完整同步（先拉后推）",
-    "  conflicts  查看/解决冲突 (resolve <id> keep-a|keep-b)",
-    "  devices    查看设备列表",
-    "  find <q>   搜索本地会话",
-    "  list       列出本地会话",
-    "  restore <uuid>  恢复已删除会话",
-    "  config     配置（服务器 / 令牌 / 设备名 / 开关）",
-  ].join("\n");
+function cmdSyncList(): string {
+  const sessions = localSessionsIndex();
+  if (sessions.length === 0) return "本地没有会话";
+  return sessions.map((s) => `• ${s.name ?? s.uuid}  (${s.entryCount} entries) — ${s.cwd}`).join("\n");
 }
 
 function preview(s: string, max = 80): string {
@@ -217,7 +205,7 @@ function preview(s: string, max = 80): string {
   return clean.length > max ? clean.slice(0, max) + "…" : clean;
 }
 
-async function syncStatus(ctx: ExtensionCommandContext): Promise<string> {
+async function cmdSyncStatus(ctx: ExtensionCommandContext): Promise<string> {
   const state = loadState();
   const lines = [
     "═══ pi-cloud-sync 状态 ═══",
@@ -249,60 +237,57 @@ async function syncStatus(ctx: ExtensionCommandContext): Promise<string> {
       lines.push(`服务器状态: 不可达 (${(err as Error).message})`);
     }
   } else {
-    lines.push("服务器状态: 未配置 — 运行 /sync config 开始");
+    lines.push("服务器状态: 未配置 — 运行 /qisumi-sync-config-import <url> <token> 开始");
   }
   return Promise.resolve(lines.join("\n"));
 }
 
-async function cmdSyncConfig(rest: string[], ctx: ExtensionCommandContext): Promise<string> {
-  const action = rest[0];
+function cmdSyncConfigShow(): string {
+  return [
+    "═══ pi-cloud-sync 配置 ═══",
+    `配置文件: ${configPath()}`,
+    `deviceName: ${cfg.deviceName}`,
+    `server.url: ${cfg.server?.url ?? ""}`,
+    `server.token: ${cfg.server?.token ? "***" + cfg.server.token.slice(-4) : ""}`,
+    `sync.automatic: ${cfg.sync.automatic}`,
+    `sync.onStartup: ${cfg.sync.onStartup}`,
+    `sync.onShutdown: ${cfg.sync.onShutdown}`,
+    `sync.scopes: ${JSON.stringify(cfg.sync.scopes)}`,
+    `sync.includeConfigs: ${JSON.stringify(cfg.sync.includeConfigs)}`,
+    `sync.autoInstallPackages: ${cfg.sync.autoInstallPackages}`,
+    `stats.collect: ${cfg.stats.collect}`,
+    `stats.currency: ${cfg.stats.currency}  (--cny/--usd 可临时切换)`,
+    `stats.usdCnyRate: ${cfg.stats.usdCnyRate}`,
+  ].join("\n");
+}
 
-  if (action === "show") {
-    return [
-      "═══ pi-cloud-sync 配置 ═══",
-      `配置文件: ${configPath()}`,
-      `deviceName: ${cfg.deviceName}`,
-      `server.url: ${cfg.server?.url ?? ""}`,
-      `server.token: ${cfg.server?.token ? "***" + cfg.server.token.slice(-4) : ""}`,
-      `sync.automatic: ${cfg.sync.automatic}`,
-      `sync.onStartup: ${cfg.sync.onStartup}`,
-      `sync.onShutdown: ${cfg.sync.onShutdown}`,
-      `sync.scopes: ${JSON.stringify(cfg.sync.scopes)}`,
-      `sync.includeConfigs: ${JSON.stringify(cfg.sync.includeConfigs)}`,
-      `sync.autoInstallPackages: ${cfg.sync.autoInstallPackages}`,
-      `stats.collect: ${cfg.stats.collect}`,
-      `stats.currency: ${cfg.stats.currency}  (--cny/--usd 可临时切换)`,
-      `stats.usdCnyRate: ${cfg.stats.usdCnyRate}`,
-    ].join("\n");
-  }
+function cmdSyncConfigSet(args: string): string {
+  const [key, ...valueParts] = args.trim().split(/\s+/);
+  const value = valueParts.join(" ");
+  if (!key || value === "")
+    return "用法: /qisumi-sync-config-set <key> <value>  (key 如 deviceName, server.url, server.token)";
+  cfg = setConfigPath(cfg, key, value);
+  saveConfig(cfg);
+  return `已设置 ${key} = ${key.includes("token") ? "***" : value}`;
+}
 
-  if (action === "set") {
-    const [key, ...valueParts] = rest.slice(1);
-    const value = valueParts.join(" ");
-    if (!key || value === "")
-      return "用法: /sync config set <key> <value>  (key 如 deviceName, server.url, server.token)";
-    cfg = setConfigPath(cfg, key, value);
-    saveConfig(cfg);
-    return `已设置 ${key} = ${key.includes("token") ? "***" : value}`;
-  }
+function cmdSyncConfigReset(): string {
+  cfg.server = null;
+  saveConfig(cfg);
+  return "已清除服务器配置。";
+}
 
-  if (action === "reset") {
-    cfg.server = null;
-    saveConfig(cfg);
-    return "已清除服务器配置。";
-  }
+function cmdSyncConfigImport(args: string): string {
+  const [url, token] = args.trim().split(/\s+/);
+  if (!url || !token) return "用法: /qisumi-sync-config-import <server-url> <token>";
+  cfg.server = { url, token, verifyTls: true };
+  saveConfig(cfg);
+  return "服务器配置已导入。运行 /qisumi-sync-now 开始同步。";
+}
 
-  if (action === "import") {
-    const url = rest[1];
-    const token = rest[2];
-    if (!url || !token) return "用法: /sync config import <server-url> <token>";
-    cfg.server = { url, token, verifyTls: true };
-    saveConfig(cfg);
-    return "服务器配置已导入。运行 /sync now 开始同步。";
-  }
-
-  // 交互式向导
-  if (!ctx.hasUI) return "非交互模式下请使用: /sync config import <url> <token>";
+/** 交互式配置向导（TUI）；非交互模式提示用命令导入 */
+async function cmdSyncConfigWizard(ctx: ExtensionCommandContext): Promise<string> {
+  if (!ctx.hasUI) return "非交互模式下请使用: /qisumi-sync-config-import <url> <token>";
 
   const url = await ctx.ui.input("服务器地址 (https://sync.example.com):", cfg.server?.url ?? "");
   if (!url) return "已取消";
@@ -316,7 +301,7 @@ async function cmdSyncConfig(rest: string[], ctx: ExtensionCommandContext): Prom
   cfg.deviceName = deviceName;
   cfg.sync.automatic = auto;
   saveConfig(cfg);
-  return `配置已保存。设备 "${deviceName}" 已关联到 ${url}。运行 /sync now 开始同步。`;
+  return `配置已保存。设备 "${deviceName}" 已关联到 ${url}。运行 /qisumi-sync-now 开始同步。`;
 }
 
 /** 点路径设置配置（string 值，JSON 自动解析） */
@@ -423,7 +408,7 @@ async function piExec(args: string[]): Promise<void> {
   await piApi.exec("pi", args, { timeout: 120_000 });
 }
 
-/* ============================ /quota 命令 ============================ */
+/* ============================ /qisumi-quota 命令 ============================ */
 
 async function cmdQuota(args: string, ctx: ExtensionCommandContext): Promise<string> {
   const json = args.includes("--json");
@@ -536,6 +521,46 @@ function registerEvents(pi: ExtensionAPI) {
   });
 }
 
+/* ============================ 命令总览 ============================ */
+
+const SYNC_COMMANDS: Array<[string, string]> = [
+  ["/qisumi-sync", "同步状态（无参）；help 查看子命令列表"],
+  ["/qisumi-sync-status", "查看同步状态"],
+  ["/qisumi-sync-push", "推送本地变更到服务器"],
+  ["/qisumi-sync-pull", "从服务器拉取变更"],
+  ["/qisumi-sync-now", "完整同步（先拉后推）"],
+  ["/qisumi-sync-conflicts", "查看冲突记录"],
+  ["/qisumi-sync-conflicts-resolve <id> keep-a|keep-b", "解决指定冲突"],
+  ["/qisumi-sync-devices", "查看已关联设备"],
+  ["/qisumi-sync-find <关键词>", "搜索本地会话"],
+  ["/qisumi-sync-list", "列出本地会话"],
+  ["/qisumi-sync-restore <uuid>", "恢复已删除会话"],
+  ["/qisumi-sync-config", "交互式配置向导"],
+  ["/qisumi-sync-config-show", "查看当前配置"],
+  ["/qisumi-sync-config-set <key> <value>", "设置配置项"],
+  ["/qisumi-sync-config-import <url> <token>", "导入服务器配置"],
+  ["/qisumi-sync-config-reset", "清除服务器配置"],
+];
+
+const OTHER_COMMANDS: Array<[string, string]> = [
+  ["/qisumi-usage [today|7d|30d|all|Nd] [current|full] [--cny|--usd] [--json|--csv|--md] [--save=file] [--top=N] [live]", "用量统计（默认近 7 天：分日 + 分模型两表）"],
+  ["/qisumi-quota [--json]", "额度探测（DeepSeek 余额 / Z.AI 5h+周 / Codex 周）"],
+];
+
+function cmdOverview(): string {
+  const lines = ["═══ pi-cloud-sync · /qisumi 命令总览 ═══", ""];
+  lines.push("─ 云同步 Sync ─");
+  for (const [cmd, desc] of SYNC_COMMANDS) lines.push(`  ${cmd.padEnd(44)} ${desc}`);
+  lines.push("", "─ 统计与额度 ─");
+  for (const [cmd, desc] of OTHER_COMMANDS) lines.push(`  ${cmd.padEnd(44)} ${desc}`);
+  lines.push("", "输入 /qisumi- 可自动补全所有命令。");
+  return lines.join("\n");
+}
+
+function syncHelp(): string {
+  return ["用法: /qisumi-sync <status|help>", ...SYNC_COMMANDS.map(([cmd, desc]) => `  ${cmd.padEnd(44)} ${desc}`)].join("\n");
+}
+
 /* ============================ 入口 ============================ */
 
 export default function (pi: ExtensionAPI) {
@@ -543,27 +568,108 @@ export default function (pi: ExtensionAPI) {
   cfg = loadConfig();
   collector = new UsageCollector();
 
-  pi.registerCommand("sync", {
-    description: "云同步：status | push | pull | now | conflicts | devices | find | list | restore | config",
-    handler: async (args, ctx) => {
-      const result = await cmdSync(args ?? "", ctx);
-      await output(ctx, result, "sync");
+  const reg = (
+    name: string,
+    description: string,
+    run: (args: string, ctx: ExtensionCommandContext) => Promise<string>,
+    options: {
+      title?: string;
+      static?: boolean;
+      completions?: (prefix: string) => AutocompleteItem[] | null;
+    } = {},
+  ) => {
+    pi.registerCommand(name, {
+      description,
+      ...(options.completions ? { getArgumentCompletions: options.completions } : {}),
+      handler: async (args, ctx) => {
+        const result = await run(args ?? "", ctx);
+        await output(ctx, result, options.title ?? name, options.static ? { static: true } : undefined);
+      },
+    });
+  };
+
+  // /qisumi 总览
+  reg("qisumi", "命令总览：全部 /qisumi-* 指令说明", () => Promise.resolve(cmdOverview()));
+
+  // ---- 云同步 Sync ----
+  reg("qisumi-sync", "同步状态（无参）；输入 help 查看全部子命令", (args, ctx) => {
+    if (args.trim() === "help") return Promise.resolve(syncHelp());
+    return cmdSyncStatus(ctx);
+  });
+  reg("qisumi-sync-status", "查看同步状态", (_args, ctx) => cmdSyncStatus(ctx), { title: "同步状态" });
+  reg("qisumi-sync-push", "推送本地变更到服务器", (_args, ctx) => cmdSyncPush(ctx), { title: "推送" });
+  reg("qisumi-sync-pull", "从服务器拉取变更", (_args, ctx) => cmdSyncPull(ctx), { title: "拉取" });
+  reg("qisumi-sync-now", "完整同步（先拉后推）", (_args, ctx) => cmdSyncNow(ctx), { title: "同步" });
+  reg("qisumi-sync-conflicts", "查看冲突记录", (_args, ctx) => cmdSyncConflicts(ctx), { title: "冲突" });
+  reg("qisumi-sync-conflicts-resolve", "解决冲突 <id> keep-a|keep-b", (args, ctx) => cmdSyncConflictResolve(args, ctx), {
+    title: "解决冲突",
+    completions: (prefix) => {
+      const words = prefix.trim().split(/\s+/).filter(Boolean);
+      const p = words.length >= 2 ? words[words.length - 1] : "";
+      if (p && !p.startsWith("k")) return null;
+      return ["keep-a", "keep-b"]
+        .filter((c) => c.startsWith(p))
+        .map((value) => ({ value, label: value }));
     },
   });
-
-  pi.registerCommand("usage", {
-    description: "用量统计：[today|7d|30d|all|Nd] [current|full] [--cny|--usd] [--json|--csv|--md] [--save=file] [--top=N] [live]  （默认近7天：按天+按模型两表）",
-    handler: async (args, ctx) => {
-      const result = await cmdUsage(args ?? "", ctx);
-      await output(ctx, result, "用量统计 Usage", { static: true });
+  reg("qisumi-sync-devices", "查看已关联设备", (_args, ctx) => cmdSyncDevices(ctx), { title: "设备" });
+  reg("qisumi-sync-find", "搜索本地会话 <关键词>", (args) => Promise.resolve(cmdSyncFind(args)), { title: "搜索会话" });
+  reg("qisumi-sync-list", "列出本地会话", () => Promise.resolve(cmdSyncList()), { title: "本地会话" });
+  reg("qisumi-sync-restore", "恢复已删除会话 <uuid>", (args) => Promise.resolve(cmdSyncRestore(args)), { title: "恢复会话" });
+  reg("qisumi-sync-config", "交互式配置向导（服务器 / 令牌 / 设备名 / 开关）", (_args, ctx) => cmdSyncConfigWizard(ctx), {
+    title: "配置",
+  });
+  reg("qisumi-sync-config-show", "查看当前配置", () => Promise.resolve(cmdSyncConfigShow()), { title: "配置" });
+  reg("qisumi-sync-config-set", "设置配置项 <key> <value>", (args) => Promise.resolve(cmdSyncConfigSet(args)), {
+    title: "配置",
+    completions: (prefix) => {
+      const words = prefix.trim().split(/\s+/).filter(Boolean);
+      if (words.length >= 2) return null;
+      const p = words[0] ?? "";
+      const keys = [
+        "deviceName",
+        "server.url",
+        "server.token",
+        "sync.automatic",
+        "sync.onStartup",
+        "sync.onShutdown",
+        "sync.scopes.config",
+        "sync.includeConfigs",
+        "stats.collect",
+        "stats.currency",
+        "stats.usdCnyRate",
+      ];
+      return keys.filter((k) => k.startsWith(p)).map((value) => ({ value, label: value }));
     },
   });
+  reg("qisumi-sync-config-import", "导入服务器配置 <url> <token>", (args) => Promise.resolve(cmdSyncConfigImport(args)), {
+    title: "配置",
+  });
+  reg("qisumi-sync-config-reset", "清除服务器配置", () => Promise.resolve(cmdSyncConfigReset()), { title: "配置" });
 
-  pi.registerCommand("quota", {
-    description: "额度探测：DeepSeek 余额 / Z.AI 5h 额度 / Codex 周额度 [--json]",
-    handler: async (args, ctx) => {
-      const result = await cmdQuota(args ?? "", ctx);
-      await output(ctx, result, "quota");
+  // ---- 用量统计 ----
+  reg(
+    "qisumi-usage",
+    "用量统计：[today|7d|30d|all|Nd] [current|full] [--cny|--usd] [--json|--csv|--md] [--save=file] [--top=N] [live]（默认近7天：按天+按模型两表）",
+    (args, ctx) => cmdUsage(args, ctx),
+    {
+      title: "用量统计 Usage",
+      static: true,
+      completions: (prefix) => {
+        const words = prefix.trim().split(/\s+/).filter(Boolean);
+        const p = words.length ? words[words.length - 1] : "";
+        const opts = ["today", "7d", "30d", "all", "full", "current", "live", "--cny", "--usd", "--json", "--csv", "--md", "--top=", "--save="];
+        return opts.filter((o) => o.startsWith(p)).map((value) => ({ value, label: value }));
+      },
+    },
+  );
+
+  // ---- 额度探测 ----
+  reg("qisumi-quota", "额度探测：DeepSeek 余额 / Z.AI 5h+周 / Codex 周 [--json]", (args, ctx) => cmdQuota(args, ctx), {
+    title: "额度探测",
+    completions: (prefix) => {
+      if (prefix.trim() === "--") return [{ value: "--json", label: "--json 输出 JSON" }];
+      return prefix.trim().startsWith("--") ? [{ value: "--json", label: "--json 输出 JSON" }] : null;
     },
   });
 
