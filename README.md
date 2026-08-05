@@ -154,6 +154,9 @@ pi -e ./extension/src/index.ts
 
 **会话**：按 entry id 合并去重，每条记录来源设备；删除为软删除，可 `restore`。
 
+**负担优化**：会话同步默认**剥离工具输出与思考过程**（本地文件保持完整，仅同步副本精简，
+配置项 `sync.stripToolOutputs` / `sync.stripThinking` 可关）；拉取为增量 + 按需（`includeSessions`）。
+
 ---
 
 ## 📊 Usage Statistics / 用量统计
