@@ -47,7 +47,6 @@ async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<stri
   const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 
   if (!sub || sub === "status") return syncStatus();
-  if (!sub || sub === "status") return syncStatus();
 
   if (sub === "push") {
     if (!serverConfigured()) return "服务器未配置：运行 /sync config";
