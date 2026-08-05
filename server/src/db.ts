@@ -56,6 +56,7 @@ export class SyncDb {
         created_at  INTEGER,
         version     INTEGER NOT NULL DEFAULT 0,
         deleted     INTEGER NOT NULL DEFAULT 0,
+        content_pruned INTEGER NOT NULL DEFAULT 0,
         updated_by  TEXT NOT NULL DEFAULT '',
         updated_at  INTEGER NOT NULL DEFAULT 0
       );
@@ -69,6 +70,25 @@ export class SyncDb {
         PRIMARY KEY (session_uuid, entry_id)
       );
       CREATE INDEX IF NOT EXISTS idx_entries_uuid ON session_entries(session_uuid);
+
+      CREATE TABLE IF NOT EXISTS session_usage (
+        session_uuid  TEXT NOT NULL,
+        entry_id      TEXT NOT NULL,
+        occurred_at   INTEGER NOT NULL,
+        provider      TEXT NOT NULL DEFAULT '',
+        model         TEXT NOT NULL DEFAULT '',
+        source_device TEXT NOT NULL DEFAULT '',
+        requests      INTEGER NOT NULL DEFAULT 1,
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read    INTEGER NOT NULL DEFAULT 0,
+        cache_write   INTEGER NOT NULL DEFAULT 0,
+        total_tokens  INTEGER NOT NULL DEFAULT 0,
+        cost          REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (session_uuid, entry_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_session_usage_occurred_at ON session_usage(occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_session_headers_deleted_updated ON session_headers(deleted, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS conflicts (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,6 +139,10 @@ export class SyncDb {
     if (!shCols.some((c) => c.name === "created_at")) {
       this.db.exec(`ALTER TABLE session_headers ADD COLUMN created_at INTEGER`);
     }
+    if (!shCols.some((c) => c.name === "content_pruned")) {
+      this.db.exec(`ALTER TABLE session_headers ADD COLUMN content_pruned INTEGER NOT NULL DEFAULT 0`);
+    }
+    this.db.pragma("optimize");
   }
 
   close() {

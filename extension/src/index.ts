@@ -548,7 +548,7 @@ const SYNC_COMMANDS: Array<[string, string]> = [
 
 const OTHER_COMMANDS: Array<[string, string]> = [
   ["/qisumi-usage [today|7d|30d|all|Nd] [current|full] [--cny|--usd] [--json|--csv|--md] [--save=file] [--top=N] [live]", "用量统计（默认近 7 天：分日 + 分模型两表）"],
-  ["/qisumi-quota [--json]", "额度探测（DeepSeek 余额 / Z.AI 5h+周 / Codex 周）"],
+  ["/qisumi-quota [--json]", "额度探测（DeepSeek 余额 / Z.AI 5h+周 / Codex 动态窗口）"],
 ];
 
 function cmdOverview(): string {
@@ -683,7 +683,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ---- 额度探测 ----
-  reg("qisumi-quota", "额度探测：DeepSeek 余额 / Z.AI 5h+周 / Codex 周 [--json]", (args, ctx) => cmdQuota(args, ctx), {
+  reg("qisumi-quota", "额度探测：DeepSeek 余额 / Z.AI 5h+周 / Codex 动态窗口 [--json]", (args, ctx) => cmdQuota(args, ctx), {
     title: "额度探测",
     completions: (prefix) => {
       if (prefix.trim() === "--") return [{ value: "--json", label: "--json 输出 JSON" }];

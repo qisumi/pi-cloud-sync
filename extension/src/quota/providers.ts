@@ -1,5 +1,5 @@
 /**
- * 额度探测：DeepSeek（余额） / Z.AI 智谱 GLM Coding Plan（5h/周 tokens） / Codex（ChatGPT 订阅周额度）。
+ * 额度探测：DeepSeek（余额） / Z.AI 智谱 GLM Coding Plan（5h/周 tokens） / Codex（ChatGPT 订阅动态窗口）。
  *
  * 端点参考开源实现：
  * - DeepSeek 官方 `GET /user/balance`
@@ -298,16 +298,84 @@ export async function probeZai(fetchImpl: FetchLike = defaultFetch()): Promise<Q
   }
 }
 
-/* ---------------- Codex（OpenAI 订阅）：5h + 周额度（允许失败） ---------------- */
+/* ---------------- Codex（OpenAI 订阅）：按窗口时长识别短周期/周/月额度（允许失败） ---------------- */
 
-interface CodexWindow {
-  used_percent?: number | string;
-  usedPercent?: number | string;
-  resets_at?: number | string;
-  resetsAt?: number | string;
-  reset_at?: number | string;
-  limit_window_seconds?: number | string;
-  window_seconds?: number | string;
+type JsonObject = Record<string, unknown>;
+
+function asObject(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
+function firstObject(...values: unknown[]): JsonObject | null {
+  for (const value of values) {
+    const object = asObject(value);
+    if (object) return object;
+  }
+  return null;
+}
+
+function firstArray(...values: unknown[]): unknown[] {
+  for (const value of values) {
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function codexWindowSeconds(window: JsonObject): number | null {
+  const seconds = num(
+    window.limit_window_seconds ??
+      window.limitWindowSeconds ??
+      window.window_seconds ??
+      window.windowSeconds,
+  );
+  if (seconds != null) return seconds;
+  const minutes = num(
+    window.window_minutes ??
+      window.windowMinutes ??
+      window.window_duration_mins ??
+      window.windowDurationMins,
+  );
+  return minutes == null ? null : minutes * 60;
+}
+
+function codexResetAt(window: JsonObject, nowMs: number): number | null {
+  let resetsAt = num(
+    window.resets_at ?? window.resetsAt ?? window.reset_at ?? window.resetAt,
+  );
+  if (resetsAt != null) {
+    // WHAM 使用 epoch 秒，app-server 快照也可能已经是毫秒。
+    return resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
+  }
+  const afterSeconds = num(window.reset_after_seconds ?? window.resetAfterSeconds);
+  return afterSeconds == null ? null : nowMs + afterSeconds * 1000;
+}
+
+type CodexWindowKind = "fiveHour" | "weekly" | "monthly";
+
+function classifyCodexWindow(
+  windowSeconds: number | null,
+  fallback: CodexWindowKind,
+): CodexWindowKind {
+  if (windowSeconds == null) return fallback;
+  if (windowSeconds <= 36 * 3600) return "fiveHour";
+  if (windowSeconds <= 14 * 86400) return "weekly";
+  return "monthly";
+}
+
+function codexWindowLabel(kind: CodexWindowKind, windowSeconds: number | null): string {
+  if (kind === "weekly") return "周额度";
+  if (kind === "monthly") return "月额度";
+  if (windowSeconds != null) {
+    const hours = Math.round((windowSeconds / 3600) * 10) / 10;
+    return `${Number.isInteger(hours) ? hours.toFixed(0) : hours.toFixed(1)} 小时额度`;
+  }
+  return "5 小时额度";
+}
+
+function safeSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "limit";
 }
 
 export async function probeCodex(fetchImpl: FetchLike = defaultFetch()): Promise<QuotaProbeResult> {
@@ -333,43 +401,147 @@ export async function probeCodex(fetchImpl: FetchLike = defaultFetch()): Promise
     );
     if (res.status === 401) return failResult(r, true, "登录已失效 (401)，请重新 codex login");
     if (!res.ok) return failResult(r, true, `HTTP ${res.status}`);
-    const j = (await res.json()) as Record<string, unknown>;
-    const rl = (j.rate_limit ?? j.rateLimits ?? {}) as Record<string, unknown>;
-    const primary = (rl.primary_window ?? rl.primary ?? {}) as CodexWindow;
-    const secondary = (rl.secondary_window ?? rl.secondary ?? {}) as CodexWindow;
+    const j = (await res.json()) as JsonObject;
+    const wrappers = [j, asObject(j.data), asObject(j.result), asObject(j.usage)].filter(
+      (value): value is JsonObject => value !== null,
+    );
+    const root = wrappers.find((value) =>
+      ["rate_limit", "rateLimit", "rate_limits", "rateLimits", "rateLimitsByLimitId"].some(
+        (key) => value[key] != null,
+      ),
+    ) ?? j;
+    const plan = [root.plan_type, root.planType, j.plan_type, j.planType].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    );
+    if (plan) r.label = `Codex (${plan.trim().slice(0, 32)})`;
 
+    const defaultRateLimit = firstObject(
+      root.rate_limit,
+      root.rateLimit,
+      root.rate_limits,
+      root.rateLimits,
+    );
     const meters: QuotaMeter[] = [];
-    const pushMeter = (id: string, label: string, w: CodexWindow | null) => {
-      if (!w) return;
-      const usedPct = clampPct(num(w.used_percent ?? w.usedPercent));
+    const meterIds = new Set<string>();
+
+    const pushWindow = (
+      idBase: string,
+      labelPrefix: string,
+      window: JsonObject | null,
+      fallbackKind: CodexWindowKind,
+    ) => {
+      if (!window) return;
+      const usedPct = clampPct(
+        num(
+          window.used_percent ??
+            window.usedPercent ??
+            window.usage_percent ??
+            window.usagePercent ??
+            window.percentage,
+        ),
+      );
       if (usedPct == null) return;
-      let resetsAt = num(w.resets_at ?? w.resetsAt ?? w.reset_at);
-      // 响应中可能是 epoch 秒或毫秒
-      if (resetsAt != null && resetsAt < 1e12) resetsAt *= 1000;
+      const windowSeconds = codexWindowSeconds(window);
+      const kind = classifyCodexWindow(windowSeconds, fallbackKind);
+      let id = `${idBase}.${kind}`;
+      let suffix = 2;
+      while (meterIds.has(id)) id = `${idBase}.${kind}.${suffix++}`;
+      meterIds.add(id);
+      const windowLabel = codexWindowLabel(kind, windowSeconds);
       meters.push({
         id,
-        label,
+        label: labelPrefix ? `${labelPrefix} · ${windowLabel}` : windowLabel,
         usedPct,
         leftPct: 100 - usedPct,
         current: null,
         limit: null,
         unit: "%",
-        resetsAt,
+        resetsAt: codexResetAt(window, ts),
         status: meterStatus(usedPct),
       });
     };
-    // primary = 5 小时窗口，secondary = 周窗口（18000s / 604800s）
-    const pWin = num(primary.limit_window_seconds ?? primary.window_seconds);
-    const sWin = num(secondary.limit_window_seconds ?? secondary.window_seconds);
-    const pIsWeekly = pWin != null && pWin >= 86400;
-    // secondary 缺省视为周额度
-    const sIsWeekly = sWin == null ? true : sWin >= 86400;
-    const fiveHour = pIsWeekly ? secondary : primary;
-    const weekly = sIsWeekly ? secondary : primary;
-    pushMeter("codex.fiveHour", "5 小时额度", fiveHour);
-    pushMeter("codex.weekly", "周额度", weekly);
 
-    if (meters.length === 0) return failResult(r, true, "响应中未包含额度数据");
+    const pushRateLimit = (idBase: string, labelPrefix: string, rateLimit: JsonObject | null) => {
+      if (!rateLimit) return;
+      pushWindow(
+        idBase,
+        labelPrefix,
+        firstObject(rateLimit.primary_window, rateLimit.primaryWindow, rateLimit.primary),
+        "fiveHour",
+      );
+      pushWindow(
+        idBase,
+        labelPrefix,
+        firstObject(rateLimit.secondary_window, rateLimit.secondaryWindow, rateLimit.secondary),
+        "weekly",
+      );
+      pushWindow(
+        idBase,
+        labelPrefix,
+        firstObject(rateLimit.tertiary_window, rateLimit.tertiaryWindow, rateLimit.tertiary),
+        "monthly",
+      );
+    };
+
+    // 不能按 primary/secondary 的位置写死：部分 Pro/Team 响应只在 primary
+    // 返回一个周/月窗口，secondary 为 null。应依据窗口时长逐项归类。
+    pushRateLimit("codex", "", defaultRateLimit);
+
+    const additional = firstArray(
+      root.additional_rate_limits,
+      root.additionalRateLimits,
+      j.additional_rate_limits,
+      j.additionalRateLimits,
+    );
+    for (const raw of additional) {
+      const item = asObject(raw);
+      if (!item) continue;
+      const nameValue = item.limit_name ?? item.limitName ?? item.metered_feature ?? item.meteredFeature;
+      const name = typeof nameValue === "string" && nameValue.trim() ? nameValue.trim().slice(0, 48) : "附加额度";
+      pushRateLimit(
+        `codex.additional.${safeSlug(name)}`,
+        name,
+        firstObject(item.rate_limit, item.rateLimit, item.rate_limits, item.rateLimits),
+      );
+    }
+
+    // app-server 的多桶返回：rateLimitsByLimitId.{id}.primary/secondary。
+    const byLimitId = firstObject(root.rateLimitsByLimitId, root.rate_limits_by_limit_id);
+    if (byLimitId) {
+      for (const [limitId, raw] of Object.entries(byLimitId)) {
+        if (limitId === "codex" && meters.some((meter) => meter.id.startsWith("codex."))) continue;
+        const snapshot = asObject(raw);
+        if (!snapshot) continue;
+        const nameValue = snapshot.limitName ?? snapshot.limit_name;
+        const name = typeof nameValue === "string" && nameValue.trim() ? nameValue.trim().slice(0, 48) : limitId;
+        pushRateLimit(`codex.additional.${safeSlug(limitId)}`, name, snapshot);
+      }
+    }
+
+    const resetCredits = firstObject(
+      root.rate_limit_reset_credits,
+      root.rateLimitResetCredits,
+      j.rate_limit_reset_credits,
+      j.rateLimitResetCredits,
+    );
+    const availableResets = resetCredits
+      ? num(resetCredits.available_count ?? resetCredits.availableCount)
+      : null;
+    if (availableResets != null && availableResets > 0) {
+      meters.push({
+        id: "codex.resetCredits",
+        label: "可用额度重置",
+        usedPct: null,
+        leftPct: null,
+        current: availableResets,
+        limit: null,
+        unit: "次",
+        resetsAt: null,
+        status: "ok",
+      });
+    }
+
+    if (meters.length === 0) return failResult(r, true, "当前订阅未返回可用额度窗口");
     r.ok = true;
     r.meters = meters;
     return r;

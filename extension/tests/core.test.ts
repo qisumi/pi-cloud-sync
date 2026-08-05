@@ -173,13 +173,14 @@ test("stats: collector dedupe + analyzer aggregation", () => {
 
   // 格式化不抛异常
   const text = formatReport(report);
-  assert.ok(text.includes("Total"));
+  assert.ok(text.includes("Tokens"));
 
   // compact 视图（默认）：只有 按天 + 按模型 两张表，不含按会话
   const compact = formatReport(report, "table", { days: 7 });
   assert.ok(compact.includes("近 7 天"));
   assert.ok(compact.includes("按天 By Day"));
   assert.ok(compact.includes("按模型 By Model"));
+  assert.ok(compact.includes("合计"));
   assert.ok(!compact.includes("按会话"));
   assert.ok(!compact.includes("总 Token"));
 
@@ -374,7 +375,7 @@ test("config: v3 -> v4 migration adds auth.json once", () => {
 });
 
 
-test("session: sanitize strips tool output and thinking on push", () => {
+test("session: sanitize strips tool output, tool calls and thinking on push", () => {
   const dir = tempAgentDir();
   const cfg = loadConfig();
   cfg.sync.stripToolOutputs = true;
@@ -391,6 +392,7 @@ test("session: sanitize strips tool output and thinking on push", () => {
     type: "message", id: "a1", parentId: "t1", timestamp: "2024-01-01T00:00:01.000Z",
     message: { role: "assistant", provider: "deepseek", model: "deepseek-v4",
       content: [{ type: "thinking", thinking: "secret reasoning ".repeat(50) },
+                { type: "toolCall", id: "c1", name: "bash", arguments: { command: "secret" } },
                 { type: "text", text: "final answer" }],
       usage: { input: 10, output: 5, totalTokens: 15 } },
   });
@@ -414,12 +416,14 @@ test("session: sanitize strips tool output and thinking on push", () => {
   const lines = changes[0].entries.map((e) => JSON.parse(e.lineJson));
 
   const tool = lines.find((l) => l.id === "t1").message;
-  assert.equal(tool.content[0].text, "[tool output omitted — 工具输出未同步]");
-  assert.equal(tool.details.output, "[omitted]");
-  assert.ok(tool.details.fullOutputPath, "fullOutputPath 保留");
+  assert.deepEqual(tool.content, []);
+  assert.equal(tool.details, undefined);
+  assert.equal(tool.toolCallId, "c1", "保留关联 id 以维持会话父子关系");
+  assert.equal(tool.toolName, "bash");
 
   const assistant = lines.find((l) => l.id === "a1").message;
   assert.ok(!assistant.content.some((b) => b.type === "thinking"), "thinking 已剥离");
+  assert.ok(!assistant.content.some((b) => b.type === "toolCall"), "toolCall 已剥离");
   assert.equal(assistant.content.length, 1);
   assert.equal(assistant.content[0].text, "final answer");
   assert.equal(assistant.model, "deepseek-v4");

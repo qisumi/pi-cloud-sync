@@ -142,11 +142,15 @@ pi -e ./extension/src/index.ts
 
 部署好服务器后，浏览器访问 `https://<你的域名>/web`，输入访问令牌即可查看：
 
-- 全部同步会话列表（名称 / 项目路径 / 消息数 / 来源设备 / 更新时间）
-- 会话对话内容（用户 / 助手 / 工具调用，含模型与 token/费用）
-- 搜索、已删除会话标记、分页浏览
+- 服务端分页的同步会话列表（20 / 40 / 80 条每页，支持状态、搜索与排序）
+- 干净的会话阅读流：仅显示用户与助手正文，过滤 toolCall / toolResult，并安全渲染 Markdown
+- 用量趋势与模型/设备分布筛选（Chart.js CDN 不可用时自动降级）
+- 关联设备在线状态、版本与最近心跳
+- 冲突内容对比，以及 keep-a / keep-b / 手动内容解决
+- 会话与消息搜索、角色筛选、排序、分页和内容复制
+- 按筛选结果批量选择并删除会话正文；Token、费用、模型、日期与来源设备统计继续保留
 
-令牌只保存在浏览器 localStorage，数据全部走服务器 API。
+令牌按“记住”选项保存在浏览器 localStorage 或 sessionStorage，数据全部走服务器 API。
 
 ---
 
@@ -160,9 +164,9 @@ pi -e ./extension/src/index.ts
 
 **非 JSON 文件**（如扩展 `.ts`）：按修改时间 LWW，旧版本存为冲突记录，不静默丢失。
 
-**会话**：按 entry id 合并去重，每条记录来源设备；删除为软删除，可 `restore`。
+**会话**：按 entry id 合并去重，每条记录来源设备。普通 tombstone 可 `restore`；网页端“删除正文”会永久裁剪消息、名称与路径，不能伪恢复，但会把用量转存为独立轻量摘要。
 
-**负担优化**：会话同步默认**剥离工具输出与思考过程**（本地文件保持完整，仅同步副本精简，
+**负担优化**：会话同步默认**剥离工具输出、工具调用块与思考过程**（本地文件保持完整，仅同步副本精简，
 配置项 `sync.stripToolOutputs` / `sync.stripThinking` 可关）；拉取为增量 + 按需（`includeSessions`）。
 
 ---
@@ -222,33 +226,30 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 | --- | --- | --- | --- |
 | **DeepSeek** | 账户余额（金额 ¥/$） | `~/.pi/agent/auth.json` 的 `deepseek`，或 `DEEPSEEK_API_KEY` | 官方 `GET /user/balance` |
 | **Z.AI 智谱 GLM Coding Plan** | 5 小时额度 + 周额度（tokens） | auth.json 的 `zai` / `zai-coding-cn` / `z-ai` / `zhipu` / `glm` 等（默认优先），或 `ZAI_CODING_CN_API_KEY` / `ZAI_API_KEY` / `ZHIPU_API_KEY` / `GLM_API_KEY` | 中国区 `open.bigmodel.cn`，全球区可用 `ZAI_BASE_URL` 覆盖 |
-| **Codex（OpenAI 订阅）** | 5 小时 + 周额度（% + 重置时间） | `~/.codex/auth.json`（`codex login` 生成） | 访问 ChatGPT 失败（如无 VPN）时**仅标记不可用，不影响其他渠道** |
+| **Codex（OpenAI 订阅）** | 按实际窗口识别 5 小时 / 周 / 月额度，并展示附加额度与可用重置次数 | `~/.codex/auth.json`（`codex login` 生成） | 兼容单窗口与新版响应；访问 ChatGPT 失败时**仅标记不可用，不影响其他渠道** |
 
 > 额度面板示例（TUI，紧凑单屏）：
 >
 > ```
 > 额度 Quota · 8月5日 23:26
->  DeepSeek              ● 余额 ¥65.96
->  Z.AI GLM 编程套餐      ████░░░░░░ 剩 60% 3.20M/8.00M · 1时10分后重置
->                        ██████░░░░ 剩 38% 5.00M/8.00M · 3天后重置
->  Codex (OpenAI 订阅)   ✕ network error
->  参考价(¥/百万tokens): DeepSeek V4-Pro 入3/出6/缓存0.025 · Z.AI 智谱 GLM-4.7 入2/出8/缓存0.4
+>  DeepSeek              余额 ● ¥65.96
+>  Z.AI GLM 编程套餐      5h  █████░░░░░░░ 剩 60% 3.20M/8.00M · 1时10分后重置
+>                        周   ███████░░░░░ 剩 38% 5.00M/8.00M · 3天后重置
+>  Codex (pro)           周   ██░░░░░░░░░░ 剩 82% · 6天后重置
 >  对比上次: Z.AI 5h +5%
 > ```
 
 ---
 
 ```
-═══ 用量统计 Usage Report ═══
-总 Token: 1.2M  (输入 800.0k / 输出 350.0k / 缓存读 50.0k / 缓存写 10.0k)
-总费用: $12.3456   请求数: 3,214   会话数: 87
-数据来源: live 3,200 条 / session scan 1,500 条 (共 4,700 条使用)
+用量 Usage · 近 7 天
+合计 1.21M tokens · ¥87.91 · 3214 请求 · 87 会话
 
-─ 按模型 By Model ─
-| Label          |  Input | Output | CacheR | CacheW | Total |    Cost | Req |
-|----------------+--------+--------+--------+--------+-------+---------+-----|
-| claude-sonnet  | 500.0k | 200.0k |  30.0k |   5.0k | 735k | $8.0000 | 1900|
-| deepseek-v4    | 300.0k | 150.0k |  20.0k |   5.0k | 475k | $4.3000 | 1314|
+按模型 By Model
+模型             Tokens    Cost   Req
+───────────────  ───────  ──────  ────
+claude-sonnet     735.0k  ¥57.20  1900
+deepseek-v4       475.0k  ¥30.71  1314
 ```
 
 数据双通道：**实时采集**（消息事件 → `~/.pi/agent/pi-stats.jsonl`，会话清理后仍完整）
@@ -257,7 +258,7 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 
 ### 💱 参考价格（¥/百万 tokens）
 
-`/quota` 面板会显示一行当前参考价（取各渠道主推模型，官网公开价，仅供估算）：
+以下参考价仅保留在文档中供估算，`/qisumi-quota` 面板不再展示，以保持额度信息紧凑：
 
 ```
 参考价(¥/百万tokens): DeepSeek V4-Pro 入3/出6/缓存0.025 · Z.AI 智谱 GLM-4.7 入2/出8/缓存0.4
@@ -316,7 +317,8 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 ```bash
 npm install
 npm run typecheck     # 类型检查（shared / server / extension）
-npm test              # 全部测试（server 8 + extension 7，含端到端双设备同步）
+npm test              # 服务端测试（15 项）
+npm run test --workspace=extension  # 插件端与端到端测试（32 项）
 ```
 
 ## 🔒 Security / 安全

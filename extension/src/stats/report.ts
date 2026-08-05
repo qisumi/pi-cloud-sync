@@ -8,7 +8,7 @@ export interface FormatOptions {
   currency: "usd" | "cny";
   /** USD→CNY 汇率（currency=cny 时用于换算显示） */
   usdCnyRate: number;
-  /** compact=仅两张表（按天/按模型，默认）；full=概要 + 按会话全量 */
+  /** compact=概要 + 两张轻量表；full=token 构成 + 按会话明细 */
   view: "compact" | "full";
   /** 时间窗口（天），仅用于表头展示 */
   days?: number | null;
@@ -17,6 +17,7 @@ export interface FormatOptions {
 const DEFAULT_OPTS: FormatOptions = { currency: "cny", usdCnyRate: 7.15, view: "compact" };
 
 function fmtNum(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(Math.round(n));
@@ -32,43 +33,81 @@ function fmtCost(n: number, o: FormatOptions): string {
   return `$${n.toFixed(4)}`;
 }
 
+/** 终端可见宽度：CJK / 全角字符 / emoji 按双宽处理。 */
+function charWidth(char: string): number {
+  const code = char.codePointAt(0) ?? 0;
+  return code >= 0x1100 &&
+    (code <= 0x115f ||
+      code === 0x2329 ||
+      code === 0x232a ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe10 && code <= 0xfe6f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1faff))
+    ? 2
+    : 1;
+}
+
+function displayWidth(s: string): number {
+  return [...s].reduce((width, char) => width + charWidth(char), 0);
+}
+
 function pad(s: string, width: number, align: "left" | "right" = "left"): string {
-  if (s.length >= width) return s;
-  const padLen = width - s.length;
+  const padLen = Math.max(0, width - displayWidth(s));
   return align === "right" ? " ".repeat(padLen) + s : s + " ".repeat(padLen);
 }
 
-function table(rows: AggRow[], o: FormatOptions, extraCols?: string[]): string {
-  const headers = ["Label", ...(extraCols ?? []), "Input", "Output", "CacheR", "CacheW", "Total", "Cost", "Req"];
-  const colWidths = headers.map((h) => h.length);
-  const data = rows.map((r) => [
-    truncate(r.label, 32),
-    ...(extraCols ?? []).map(() => ""),
-    String(fmtNum(r.input)),
-    String(fmtNum(r.output)),
-    String(fmtNum(r.cacheRead)),
-    String(fmtNum(r.cacheWrite)),
-    String(fmtNum(r.total)),
-    fmtCost(r.cost, o),
-    String(r.requests),
-  ]);
-  for (const row of data) {
-    row.forEach((cell, i) => {
-      colWidths[i] = Math.max(colWidths[i], cell.length);
-    });
+function truncate(s: string, width: number): string {
+  if (displayWidth(s) <= width) return s;
+  let out = "";
+  let used = 0;
+  for (const char of s) {
+    const next = used + charWidth(char);
+    if (next > width - 1) break;
+    out += char;
+    used = next;
   }
-  const sep = headers.map((h, i) => "-".repeat(colWidths[i] + 2)).join("+");
-  const headerLine = headers.map((h, i) => " " + pad(h, colWidths[i]) + " ").join("|");
-  const lines = [sep, headerLine, sep];
-  for (const row of data) {
-    lines.push(row.map((cell, i) => " " + pad(cell, colWidths[i], i > 0 ? "right" : "left") + " ").join("|"));
-  }
-  lines.push(sep);
-  return lines.join("\n");
+  return out + "…";
 }
 
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+function renderTable(headers: string[], data: string[][], numericFrom = 1): string {
+  if (data.length === 0) return "暂无数据";
+  const colWidths = headers.map(displayWidth);
+  for (const row of data) {
+    row.forEach((cell, i) => {
+      colWidths[i] = Math.max(colWidths[i], displayWidth(cell));
+    });
+  }
+  const line = (row: string[]) =>
+    row.map((cell, i) => pad(cell, colWidths[i], i >= numericFrom ? "right" : "left")).join("  ");
+  const divider = colWidths.map((width) => "─".repeat(width)).join("  ");
+  return [line(headers), divider, ...data.map(line)].join("\n");
+}
+
+function detailedTable(rows: AggRow[], o: FormatOptions): string {
+  return renderTable(
+    ["项目", "Input", "Output", "CacheR", "CacheW", "Total", "Cost", "Req"],
+    rows.map((r) => [
+      truncate(r.label, 28),
+      fmtNum(r.input),
+      fmtNum(r.output),
+      fmtNum(r.cacheRead),
+      fmtNum(r.cacheWrite),
+      fmtNum(r.total),
+      fmtCost(r.cost, o),
+      String(r.requests),
+    ]),
+  );
+}
+
+function compactTable(rows: AggRow[], o: FormatOptions, label: string): string {
+  return renderTable(
+    [label, "Tokens", "Cost", "Req"],
+    rows.map((r) => [truncate(r.label, 28), fmtNum(r.total), fmtCost(r.cost, o), String(r.requests)]),
+  );
 }
 
 function summaryLines(r: StatsReport, o: FormatOptions): string[] {
@@ -116,7 +155,7 @@ export function formatReport(
       return [
         title,
         "",
-        ...summaryLines(report, o).map((l) => `- ${l}`),
+        ...summaryLines(report, o).map((line) => `- ${line}`),
         "",
         md(report.byDay, "按天 (By Day)"),
         "",
@@ -128,26 +167,23 @@ export function formatReport(
     return [title, "", md(report.byDay, "按天 (By Day)"), "", md(report.byModel, "按模型 (By Model)")].join("\n");
   }
 
-  // table
-  const lines: string[] = [];
-  lines.push(`═══ 用量统计 Usage${o.days ? ` (近 ${o.days} 天)` : " (全部)"} ═══`);
+  const lines: string[] = [`用量 Usage · ${o.days ? `近 ${o.days} 天` : "全部时间"}`];
   if (o.view === "full") {
     lines.push(...summaryLines(report, o));
-    lines.push("");
+  } else {
+    const s = report.summary;
+    lines.push(`合计 ${fmtNum(s.totalTokens)} tokens · ${fmtCost(s.totalCost, o)} · ${s.requests} 请求 · ${s.sessions} 会话`);
   }
-  lines.push("─ 按天 By Day ─");
-  lines.push(table(report.byDay, o));
-  lines.push("");
-  lines.push("─ 按模型 By Model ─");
-  lines.push(table(report.byModel, o));
+
+  lines.push("", "按天 By Day");
+  lines.push(o.view === "full" ? detailedTable(report.byDay, o) : compactTable(report.byDay, o, "日期"));
+  lines.push("", "按模型 By Model");
+  lines.push(o.view === "full" ? detailedTable(report.byModel, o) : compactTable(report.byModel, o, "模型"));
+
   if (o.view === "full") {
-    lines.push("");
-    lines.push(`─ 按会话 By Session (Top) ─`);
-    lines.push(table(report.bySession, o));
+    lines.push("", "按会话 By Session (Top)", detailedTable(report.bySession, o));
     if (report.sessionDetail) {
-      lines.push("");
-      lines.push("─ 当前会话 Current Session ─");
-      lines.push(table([report.sessionDetail], o));
+      lines.push("", "当前会话 Current Session", detailedTable([report.sessionDetail], o));
     }
   }
   return lines.join("\n");
@@ -157,11 +193,11 @@ export function formatReport(
 export function formatSessionSummary(label: string, report: StatsReport, rawOpts: Partial<FormatOptions> = {}): string {
   const o: FormatOptions = { ...DEFAULT_OPTS, ...rawOpts };
   const d = report.sessionDetail;
-  if (!d) return `当前会话无用量数据。`;
+  if (!d) return "当前会话无用量数据。";
   return [
-    `会话: ${label}`,
-    `Token: 输入 ${fmtNum(d.input)} / 输出 ${fmtNum(d.output)} / 缓存读 ${fmtNum(d.cacheRead)} / 缓存写 ${fmtNum(d.cacheWrite)} / 合计 ${fmtNum(d.total)}`,
-    `费用: ${fmtCost(d.cost, o)}   请求: ${d.requests}`,
+    `当前会话 · ${label}`,
+    `${fmtNum(d.total)} tokens · ${fmtCost(d.cost, o)} · ${d.requests} 请求`,
+    `输入 ${fmtNum(d.input)} · 输出 ${fmtNum(d.output)} · 缓存读 ${fmtNum(d.cacheRead)} · 缓存写 ${fmtNum(d.cacheWrite)}`,
   ].join("\n");
 }
 

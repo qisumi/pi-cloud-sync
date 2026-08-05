@@ -1,155 +1,218 @@
 import type { FastifyInstance } from "fastify";
 import type { SyncDb } from "../db.js";
+import { pruneSessions } from "../sessions.js";
 
 interface EntryView {
   id: string;
-  type: string;
-  role?: string;
-  text?: string;
+  type: "message";
+  role: "user" | "assistant";
+  text: string;
   model?: string;
   provider?: string;
   ts?: number;
-  toolName?: string;
+  sourceDevice?: string;
   usage?: { input: number; output: number; totalTokens: number; cost: number };
-  summary?: string;
 }
 
-/** 从消息 content 提取可读文本（string 或 block 数组） */
-function extractText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => {
-        const block = b as Record<string, unknown>;
-        if (block.type === "text") return String(block.text ?? "");
-        if (block.type === "toolCall") {
-          const name = String(block.name ?? "tool");
-          return `[调用工具 ${name}]`;
-        }
-        if (block.type === "image") return "[图片]";
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
+/** 仅提取对话正文；thinking 与 toolCall 块不会进入网页阅读流。 */
+function extractReadableText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((value) => {
+      const block = value as Record<string, unknown>;
+      if (block.type === "text") return String(block.text ?? "");
+      if (block.type === "image") return "[图片]";
+      return "";
+    })
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n")
+    .trim();
 }
 
-function parseEntry(line: string): EntryView | null {
+/** 网页只展示真实的 user / assistant 文本消息，工具结果与纯工具调用仍可参与统计。 */
+function parseReadableEntry(line: string): EntryView | null {
   try {
-    const obj = JSON.parse(line) as Record<string, unknown>;
-    const id = String(obj.id ?? "");
-    const tsRaw = obj.timestamp;
-    const ts = typeof tsRaw === "string" ? Date.parse(tsRaw) : typeof tsRaw === "number" ? tsRaw : undefined;
-    const base: EntryView = { id, type: String(obj.type ?? "?"), ts: Number.isNaN(ts ?? NaN) ? undefined : ts };
+    const object = JSON.parse(line) as Record<string, unknown>;
+    if (object.type !== "message" || !object.message || typeof object.message !== "object") return null;
+    const message = object.message as Record<string, unknown>;
+    const role = String(message.role ?? "");
+    if (role !== "user" && role !== "assistant") return null;
+    const text = extractReadableText(message.content);
+    if (!text) return null;
 
-    if (obj.type === "message") {
-      const m = (obj.message ?? {}) as Record<string, unknown>;
-      base.role = String(m.role ?? "");
-      base.text = extractText(m.content);
-      base.model = typeof m.model === "string" ? m.model : undefined;
-      base.provider = typeof m.provider === "string" ? m.provider : undefined;
-      if (m.role === "toolResult") base.toolName = typeof m.toolName === "string" ? m.toolName : undefined;
-      const u = (m.usage ?? {}) as Record<string, unknown>;
-      if (u && Object.keys(u).length > 0) {
-        const cost = (u.cost ?? {}) as Record<string, unknown>;
-        base.usage = {
-          input: Number(u.input ?? 0),
-          output: Number(u.output ?? 0),
-          totalTokens: Number(u.totalTokens ?? 0),
-          cost: Number(cost.total ?? 0),
-        };
-      }
-      return base;
+    const tsRaw = object.timestamp;
+    const ts = typeof tsRaw === "string" ? Date.parse(tsRaw) : typeof tsRaw === "number" ? tsRaw : undefined;
+    const entry: EntryView = {
+      id: String(object.id ?? ""),
+      type: "message",
+      role,
+      text,
+      model: typeof message.model === "string" ? message.model : undefined,
+      provider: typeof message.provider === "string" ? message.provider : undefined,
+      ts: Number.isNaN(ts ?? Number.NaN) ? undefined : ts,
+    };
+    const usage = message.usage as Record<string, unknown> | undefined;
+    if (usage && Object.keys(usage).length > 0) {
+      const cost = (usage.cost ?? {}) as Record<string, unknown>;
+      entry.usage = {
+        input: Number(usage.input ?? 0) || 0,
+        output: Number(usage.output ?? 0) || 0,
+        totalTokens: Number(usage.totalTokens ?? 0) || 0,
+        cost: Number(cost.total ?? 0) || 0,
+      };
     }
-    if (obj.type === "compaction") {
-      base.summary = typeof obj.summary === "string" ? obj.summary : undefined;
-      base.type = "compaction";
-      return base;
-    }
-    if (obj.type === "branch_summary") {
-      base.summary = typeof obj.summary === "string" ? obj.summary : undefined;
-      base.type = "branch_summary";
-      return base;
-    }
-    // 其余类型（session_info / model_change / thinking_level_change / custom / label）
-    base.type = String(obj.type ?? "?");
-    if (obj.type === "session_info") base.text = String(obj.name ?? "");
-    if (obj.type === "model_change") base.text = `${obj.provider ?? ""}/${obj.modelId ?? ""}`;
-    return base;
+    return entry;
   } catch {
     return null;
   }
 }
 
+function positiveInt(value: string | undefined, fallback: number, max: number): number {
+  return Math.min(Math.max(Number.parseInt(value ?? "", 10) || fallback, 1), max);
+}
+
 /** 注册网页端 API（受 /api/v1 token 认证保护） */
 export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
-  // 会话列表
-  app.get("/api/v1/web/sessions", async () => {
+  app.get<{
+    Querystring: { page?: string; limit?: string; q?: string; status?: string; sort?: string };
+  }>("/api/v1/web/sessions", async (req) => {
+    const page = positiveInt(req.query.page, 1, 1_000_000);
+    const pageSize = positiveInt(req.query.limit, 40, 100);
+    const query = String(req.query.q ?? "").trim().slice(0, 200);
+    const status = ["active", "deleted", "all"].includes(String(req.query.status))
+      ? String(req.query.status)
+      : "active";
+    const sort = String(req.query.sort ?? "updated-desc");
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (status === "active") clauses.push("h.deleted = 0");
+    if (status === "deleted") clauses.push("h.deleted = 1");
+    if (query) {
+      clauses.push(
+        `(instr(lower(COALESCE(h.name, '')), lower(?)) > 0
+          OR instr(lower(COALESCE(h.cwd, '')), lower(?)) > 0
+          OR instr(lower(h.uuid), lower(?)) > 0
+          OR instr(lower(COALESCE(h.updated_by, '')), lower(?)) > 0)`,
+      );
+      params.push(query, query, query, query);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const order =
+      sort === "updated-asc"
+        ? "h.updated_at ASC"
+        : sort === "entries-desc"
+          ? "entry_count DESC, h.updated_at DESC"
+          : sort === "name-asc"
+            ? "COALESCE(h.name, h.uuid) COLLATE NOCASE ASC"
+            : "h.updated_at DESC";
+
+    const total = (dbs.db.prepare(`SELECT COUNT(*) AS count FROM session_headers h ${where}`).get(...params) as {
+      count: number;
+    }).count;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * pageSize;
     const rows = dbs.db
       .prepare(
-        `SELECT h.uuid, h.cwd, h.name, h.version, h.deleted, h.updated_by, h.updated_at,
-                (SELECT COUNT(*) FROM session_entries e WHERE e.session_uuid = h.uuid) AS entry_count
+        `SELECT h.uuid, h.cwd, h.name, h.version, h.deleted, h.content_pruned, h.updated_by, h.updated_at,
+                COALESCE(entries.entry_count, 0) AS entry_count,
+                COALESCE(usage.total_tokens, 0) AS retained_tokens,
+                COALESCE(usage.cost, 0) AS retained_cost
          FROM session_headers h
-         ORDER BY h.updated_at DESC`,
+         LEFT JOIN (
+           SELECT session_uuid, COUNT(*) AS entry_count FROM session_entries GROUP BY session_uuid
+         ) entries ON entries.session_uuid = h.uuid
+         LEFT JOIN (
+           SELECT session_uuid, SUM(total_tokens) AS total_tokens, SUM(cost) AS cost
+           FROM session_usage GROUP BY session_uuid
+         ) usage ON usage.session_uuid = h.uuid
+         ${where}
+         ORDER BY ${order}
+         LIMIT ? OFFSET ?`,
       )
-      .all() as Array<{
+      .all(...params, pageSize, offset) as Array<{
       uuid: string;
       cwd: string;
       name: string | null;
       version: number;
       deleted: number;
+      content_pruned: number;
       updated_by: string;
       updated_at: number;
       entry_count: number;
+      retained_tokens: number;
+      retained_cost: number;
     }>;
+
     return {
       ok: true,
-      data: rows.map((r) => ({
-        uuid: r.uuid,
-        cwd: r.cwd,
-        name: r.name,
-        version: r.version,
-        deleted: r.deleted === 1,
-        updatedBy: r.updated_by,
-        updatedAt: r.updated_at,
-        entryCount: r.entry_count,
-      })),
+      data: {
+        items: rows.map((row) => ({
+          uuid: row.uuid,
+          cwd: row.cwd,
+          name: row.name,
+          version: row.version,
+          deleted: row.deleted === 1,
+          contentPruned: row.content_pruned === 1,
+          updatedBy: row.updated_by,
+          updatedAt: row.updated_at,
+          entryCount: row.entry_count,
+          retainedTokens: row.retained_tokens,
+          retainedCost: row.retained_cost,
+        })),
+        page: safePage,
+        pageSize,
+        total,
+        totalPages,
+      },
     };
   });
 
-  // 会话详情（条目流）
   app.get<{ Params: { uuid: string }; Querystring: { limit?: string; offset?: string } }>(
     "/api/v1/web/sessions/:uuid",
     async (req, reply) => {
       const uuid = req.params.uuid;
-      const header = dbs.db
-        .prepare(`SELECT * FROM session_headers WHERE uuid = ?`)
-        .get(uuid) as
-        | { uuid: string; cwd: string; name: string | null; header: string | null; created_at: number | null; deleted: number; updated_by: string; updated_at: number }
+      const header = dbs.db.prepare(`SELECT * FROM session_headers WHERE uuid = ?`).get(uuid) as
+        | {
+            uuid: string;
+            cwd: string;
+            name: string | null;
+            header: string | null;
+            created_at: number | null;
+            version: number;
+            deleted: number;
+            content_pruned: number;
+            updated_by: string;
+            updated_at: number;
+          }
         | undefined;
-      if (!header) {
-        return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "session not found" });
-      }
+      if (!header) return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "session not found" });
 
-      const limit = Math.min(Math.max(parseInt(req.query.limit ?? "1000", 10) || 1000, 1), 5000);
-      const offset = Math.max(parseInt(req.query.offset ?? "0", 10) || 0, 0);
-
+      const limit = positiveInt(req.query.limit, 100, 500);
+      const offset = Math.max(Number.parseInt(req.query.offset ?? "0", 10) || 0, 0);
       const rows = dbs.db
         .prepare(
           `SELECT line, source_device, received_at FROM session_entries
-           WHERE session_uuid = ? ORDER BY received_at LIMIT ? OFFSET ?`,
+           WHERE session_uuid = ? ORDER BY received_at, rowid`,
         )
-        .all(uuid, limit, offset) as Array<{ line: string; source_device: string; received_at: number }>;
-
-      const entries: EntryView[] = [];
-      for (const r of rows) {
-        const e = parseEntry(r.line);
-        if (e) {
-          (e as unknown as { sourceDevice?: string }).sourceDevice = r.source_device;
-          entries.push(e);
-        }
+        .all(uuid) as Array<{ line: string; source_device: string; received_at: number }>;
+      const readable: EntryView[] = [];
+      for (const row of rows) {
+        const entry = parseReadableEntry(row.line);
+        if (!entry) continue;
+        entry.sourceDevice = row.source_device;
+        readable.push(entry);
       }
+      const usage = dbs.db
+        .prepare(
+          `SELECT COALESCE(SUM(requests), 0) AS requests,
+                  COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                  COALESCE(SUM(cost), 0) AS cost,
+                  COUNT(DISTINCT NULLIF(model, '')) AS models
+           FROM session_usage WHERE session_uuid = ?`,
+        )
+        .get(uuid) as { requests: number; total_tokens: number; cost: number; models: number };
 
       return {
         ok: true,
@@ -159,14 +222,43 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
           name: header.name,
           headerJson: header.header,
           createdAt: header.created_at,
+          version: header.version,
           deleted: header.deleted === 1,
+          contentPruned: header.content_pruned === 1,
           updatedBy: header.updated_by,
           updatedAt: header.updated_at,
-          total: (dbs.db.prepare(`SELECT COUNT(*) c FROM session_entries WHERE session_uuid = ?`).get(uuid) as { c: number }).c,
+          total: readable.length,
+          rawTotal: rows.length,
           offset,
-          entries,
+          entries: readable.slice(offset, offset + limit),
+          usageSummary: {
+            requests: usage.requests,
+            totalTokens: usage.total_tokens,
+            cost: usage.cost,
+            models: usage.models,
+          },
         },
       };
+    },
+  );
+
+  app.post<{ Body: { uuids?: unknown; confirm?: boolean } }>(
+    "/api/v1/web/sessions/delete",
+    async (req, reply) => {
+      if (req.body?.confirm !== true) {
+        return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "confirm must be true" });
+      }
+      if (!Array.isArray(req.body?.uuids)) {
+        return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "uuids must be an array" });
+      }
+      const uuids = req.body.uuids
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0 && value.length <= 160);
+      if (uuids.length === 0 || uuids.length > 200) {
+        return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "select 1-200 sessions" });
+      }
+      return { ok: true, data: pruneSessions(dbs, uuids, "web-console") };
     },
   );
 }

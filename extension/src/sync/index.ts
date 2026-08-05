@@ -139,7 +139,9 @@ export async function push(
         for (const merged of res) {
           const st = state.sessions[merged.uuid] ?? { serverVersion: 0, pushed: [] };
           st.serverVersion = merged.version;
-          st.pushed = merged.entryIds;
+          st.pushed = merged.deleted
+            ? [...new Set([...st.pushed, ...merged.entryIds])]
+            : merged.entryIds;
           state.sessions[merged.uuid] = st;
           report.pushed.sessions++;
           report.pushed.entries += merged.acceptedEntries;

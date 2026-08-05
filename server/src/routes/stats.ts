@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { SyncDb } from "../db.js";
+import { parseUsageHit, type UsageHit } from "../usage.js";
 
 /**
  * 用量统计聚合（受 /api/v1 token 认证保护）。
  *
- * 数据来源：session_entries 中的 JSONL 消息条目（assistant / toolResult 的 usage、
- * compaction 的 usage）。按 天 / 模型 / 设备 聚合 tokens 与金额(cost)，支持
+ * 数据来源：活跃会话的 session_entries，以及正文裁剪后不含内容的 session_usage。
+ * 按 天 / 模型 / 设备 聚合 tokens 与金额(cost)，支持
  * days(1d/7d/30d/all)、device、model 过滤，默认聚合全部客户端。
  */
 
@@ -23,64 +24,6 @@ function emptyAgg(): StatsAgg {
   return { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 };
 }
 
-interface UsageHit {
-  ts: number;
-  provider: string;
-  model: string;
-  device: string;
-  sessionUuid: string;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  total: number;
-  cost: number;
-}
-
-/** 从一条 JSONL 会话条目中解析用量命中；无用量信息返回 null */
-function parseHit(line: string, sourceDevice: string, sessionUuid: string): UsageHit | null {
-  try {
-    const obj = JSON.parse(line) as Record<string, unknown>;
-    const tsRaw = obj.timestamp;
-    const ts = typeof tsRaw === "string" ? Date.parse(tsRaw) : typeof tsRaw === "number" ? tsRaw : undefined;
-    if (typeof ts !== "number" || Number.isNaN(ts)) return null;
-
-    let role = "";
-    let provider = "";
-    let model = "";
-    let usage: Record<string, unknown> | undefined;
-
-    if (obj.type === "message" && obj.message && typeof obj.message === "object") {
-      const m = obj.message as Record<string, unknown>;
-      role = String(m.role ?? "");
-      if (role !== "assistant" && role !== "toolResult") return null;
-      provider = String(m.provider ?? "");
-      model = String(m.model ?? "");
-      usage = (m.usage ?? undefined) as Record<string, unknown> | undefined;
-    } else if (obj.type === "compaction") {
-      model = "(compaction)";
-      usage = (obj.usage ?? undefined) as Record<string, unknown> | undefined;
-    } else {
-      return null;
-    }
-    if (!usage || typeof usage !== "object" || Object.keys(usage).length === 0) return null;
-
-    const input = Number(usage.input ?? 0) || 0;
-    const output = Number(usage.output ?? 0) || 0;
-    const cacheRead = Number(usage.cacheRead ?? 0) || 0;
-    const cacheWrite = Number(usage.cacheWrite ?? 0) || 0;
-    const total = Number(usage.totalTokens ?? 0) || input + output + cacheRead + cacheWrite;
-    const costObj = (usage.cost ?? {}) as Record<string, unknown>;
-    const cost = Number(costObj.total ?? 0) || 0;
-    if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && total === 0 && cost === 0) {
-      return null; // 无用量信息
-    }
-    return { ts, provider, model, device: sourceDevice, sessionUuid, input, output, cacheRead, cacheWrite, total, cost };
-  } catch {
-    return null; // 损坏行
-  }
-}
-
 function dayLabel(ts: number): string {
   const d = new Date(ts);
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -90,7 +33,7 @@ function dayLabel(ts: number): string {
 
 function addAgg(map: Map<string, StatsAgg>, key: string, hit: UsageHit): void {
   const row = map.get(key) ?? emptyAgg();
-  row.requests += 1;
+  row.requests += hit.requests;
   row.input += hit.input;
   row.output += hit.output;
   row.cacheRead += hit.cacheRead;
@@ -123,25 +66,15 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
     const allDevices = new Set<string>();
     const allModels = new Set<string>();
 
-    const stmt = dbs.db.prepare(
-      `SELECT line, source_device, session_uuid FROM session_entries`,
-    );
-
-    for (const r of stmt.iterate() as IterableIterator<{
-      line: string;
-      source_device: string;
-      session_uuid: string;
-    }>) {
-      const hit = parseHit(r.line, r.source_device, r.session_uuid);
-      if (!hit) continue;
-      if (cutoff && hit.ts < cutoff) continue;
+    const consumeHit = (hit: UsageHit) => {
+      if (cutoff && hit.ts < cutoff) return;
 
       allDevices.add(hit.device || "unknown");
       allModels.add(hit.model || "(unknown)");
-      if (deviceFilter && hit.device !== deviceFilter) continue;
-      if (modelFilter && hit.model !== modelFilter) continue;
+      if (deviceFilter && hit.device !== deviceFilter) return;
+      if (modelFilter && hit.model !== modelFilter) return;
 
-      summary.requests += 1;
+      summary.requests += hit.requests;
       summary.input += hit.input;
       summary.output += hit.output;
       summary.cacheRead += hit.cacheRead;
@@ -153,6 +86,57 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
       addAgg(dayMap, dayLabel(hit.ts), hit);
       addAgg(modelMap, hit.model || "(unknown)", hit);
       addAgg(deviceMap, hit.device || "unknown", hit);
+    };
+
+    const stmt = dbs.db.prepare(`SELECT line, source_device, session_uuid FROM session_entries`);
+
+    for (const r of stmt.iterate() as IterableIterator<{
+      line: string;
+      source_device: string;
+      session_uuid: string;
+    }>) {
+      const hit = parseUsageHit(r.line, r.source_device, r.session_uuid);
+      if (!hit) continue;
+      consumeHit(hit);
+    }
+
+    const usageSql =
+      `SELECT session_uuid, entry_id, occurred_at, provider, model, source_device, requests,
+              input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost
+       FROM session_usage${cutoff ? " WHERE occurred_at >= ?" : ""}`;
+    const usageRows = cutoff
+      ? dbs.db.prepare(usageSql).iterate(cutoff)
+      : dbs.db.prepare(usageSql).iterate();
+    for (const row of usageRows as IterableIterator<{
+      session_uuid: string;
+      entry_id: string;
+      occurred_at: number;
+      provider: string;
+      model: string;
+      source_device: string;
+      requests: number;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read: number;
+      cache_write: number;
+      total_tokens: number;
+      cost: number;
+    }>) {
+      consumeHit({
+        entryId: row.entry_id,
+        ts: row.occurred_at,
+        provider: row.provider,
+        model: row.model,
+        device: row.source_device,
+        sessionUuid: row.session_uuid,
+        requests: row.requests,
+        input: row.input_tokens,
+        output: row.output_tokens,
+        cacheRead: row.cache_read,
+        cacheWrite: row.cache_write,
+        total: row.total_tokens,
+        cost: row.cost,
+      });
     }
     summary.sessions = sessionSet.size;
 

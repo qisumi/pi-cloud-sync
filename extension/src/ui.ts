@@ -4,7 +4,6 @@ import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi
 import type { QuotaReport } from "./quota/index.js";
 import { computeDeltas, toSnapshot } from "./quota/history.js";
 import type { QuotaMeter } from "./quota/types.js";
-import { cnyPriceLine } from "./quota/prices.js";
 
 /**
  * 命令输出助手：
@@ -77,11 +76,10 @@ async function showTextPane(ctx: ExtensionCommandContext, title: string, lines: 
     const container = new Container();
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
-    visible.forEach((row, i) => {
-      container.addChild(new Text(row, 1, i + 1));
-    });
+    // 单个 Text 统一换行：paddingY 始终为 0，避免逐行组件累积垂直留白。
+    container.addChild(new Text(visible.join("\n"), 1, 0));
+    container.addChild(new Text(theme.fg("dim", " Esc/Enter 关闭"), 1, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("dim", " Esc/Enter 关闭"), 1, visible.length + 1));
 
     return {
       render: (w) => container.render(w),
@@ -111,7 +109,7 @@ function padTo(s: string, width: number): string {
   return s + " ".repeat(Math.max(0, width - visible));
 }
 
-function barWidth(theme: unknown, usedPct: number | null, width = 20): string {
+function barWidth(theme: unknown, usedPct: number | null, width = 12): string {
   const th = theme as { fg: (color: string, s: string) => string };
   if (usedPct == null) return th.fg("dim", "░".repeat(width));
   const color = usedPct >= 90 ? "error" : usedPct >= 70 ? "warning" : "success";
@@ -144,7 +142,10 @@ function meterRow(theme: { fg: (color: string, s: string) => string }, m: QuotaM
     const v = m.current ?? 0;
     const icon = m.status === "critical" ? "⚠" : m.status === "warn" ? "▲" : "●";
     const color = m.status === "critical" ? "error" : m.status === "warn" ? "warning" : "success";
-    return `${theme.fg(color, `${icon} ${m.unit}${v.toFixed(2)}`)}${theme.fg("dim", " 余额")}`;
+    return theme.fg(color, `${icon} ${m.unit}${v.toFixed(2)}`);
+  }
+  if (m.id === "codex.resetCredits") {
+    return theme.fg("success", `● ${Math.round(m.current ?? 0)} 次可用`);
   }
   if (m.usedPct == null) return theme.fg("dim", "--");
   const tokens =
@@ -161,8 +162,11 @@ function meterRow(theme: { fg: (color: string, s: string) => string }, m: QuotaM
 /** 计量器短标签（深色/紧凑显示用） */
 function shortLabel(m: QuotaMeter): string {
   if (m.id === "deepseek.balance") return "余额";
+  if (m.id === "codex.resetCredits") return "重置";
+  if (m.id.startsWith("codex.additional.")) return m.label.replace(/额度/g, "").replace(/\s*·\s*/g, "·");
   if (m.id.endsWith(".fiveHour")) return "5h";
   if (m.id.endsWith(".weekly")) return "周";
+  if (m.id.endsWith(".monthly")) return "月";
   return m.label;
 }
 
@@ -189,21 +193,22 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
 
     // 渠道名列宽（CJK 双宽）
     const visLen = (s: string) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
-    const provPad = Math.max(0, ...report.providers.map((p) => visLen(p.label))) + 2;
+    const provPad = Math.min(28, Math.max(0, ...report.providers.map((p) => visLen(p.label)))) + 2;
     const blank = " ".repeat(provPad);
-    const meterPad = Math.max(0, ...report.providers.map((p) => p.meters.map((m) => visLen(shortLabel(m))).reduce((a, b) => Math.max(a, b), 0))) + 1;
+    const meterPad = Math.min(24, Math.max(0, ...report.providers.map((p) => p.meters.map((m) => visLen(shortLabel(m))).reduce((a, b) => Math.max(a, b), 0)))) + 1;
 
     for (const p of report.providers) {
+      const providerLabel = padTo(p.label, provPad);
       if (!p.configured) {
-        rows.push(theme.fg("dim", ` ${p.label.padEnd(provPad)} ✕ ${p.error ?? "未配置"}`));
+        rows.push(theme.fg("dim", ` ${providerLabel}○ ${p.error ?? "未配置"}`));
         continue;
       }
       if (!p.ok) {
-        rows.push(theme.fg("warning", ` ${p.label.padEnd(provPad)} ✕ ${p.error ?? "探测失败"}`));
+        rows.push(theme.fg("warning", ` ${providerLabel}✕ ${p.error ?? "探测失败"}`));
         continue;
       }
       p.meters.forEach((m, i) => {
-        const head = i === 0 ? ` ${p.label.padEnd(provPad)}` : ` ${blank}`;
+        const head = i === 0 ? ` ${providerLabel}` : ` ${blank}`;
         rows.push(`${head}${theme.fg("dim", padTo(shortLabel(m), meterPad))}${meterRow(th, m)}`);
       });
     }
@@ -227,15 +232,9 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
       rows.push(theme.fg("muted", ` 对比上次: ${comps.join(" · ")}`));
     }
 
-    // 人民币参考价（DeepSeek / Z.AI 官网公开价）
-    rows.push(theme.fg("muted", ` ${cnyPriceLine()}`));
-
-    rows.push("");
-    rows.push(theme.fg("dim", " Esc 关闭"));
-
-    rows.forEach((row, i) => {
-      container.addChild(new Text(row, 1, i + 1));
-    });
+    // 单个 Text 渲染所有数据行，避免每行 padding 累积造成空屏。
+    container.addChild(new Text(rows.join("\n"), 1, 0));
+    container.addChild(new Text(theme.fg("dim", " Esc 关闭"), 1, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {

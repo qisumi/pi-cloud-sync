@@ -5,7 +5,6 @@
 import type { QuotaProbeResult, QuotaReport, QuotaSnapshot } from "./types.js";
 import { probeDeepSeek, probeZai, probeCodex, type FetchLike } from "./providers.js";
 import { recordSnapshot, toSnapshot, latestSnapshot, computeDeltas } from "./history.js";
-import { cnyPriceLine } from "./prices.js";
 
 /** 并发探测全部渠道（Codex 失败不抛错） */
 export async function probeAllQuotas(fetchImpl?: FetchLike): Promise<QuotaReport> {
@@ -65,7 +64,10 @@ function meterLine(m: QuotaProbeResult["meters"][number]): string {
   if (m.id === "deepseek.balance") {
     const v = m.current ?? 0;
     const flag = m.status === "critical" ? "⚠" : m.status === "warn" ? "▲" : "●";
-    return `${flag} 余额 ${m.unit}${v.toFixed(2)}`;
+    return `${flag} ${m.unit}${v.toFixed(2)} 余额`;
+  }
+  if (m.id === "codex.resetCredits") {
+    return `● 可用 ${Math.round(m.current ?? 0)} 次`;
   }
   if (m.usedPct == null) return "--";
   const tokens =
@@ -84,6 +86,7 @@ export function formatQuotaText(report: QuotaReport): string {
 
   // 渠道名列宽（CJK 双宽）
   const visLen = (s: string) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
+  const padVisible = (s: string, width: number) => s + " ".repeat(Math.max(0, width - visLen(s)));
   const provPad =
     Math.max(0, ...report.providers.map((p) => visLen(p.label))) +
     (report.providers.length > 0 ? 2 : 0);
@@ -91,17 +94,15 @@ export function formatQuotaText(report: QuotaReport): string {
 
   for (const p of report.providers) {
     if (!p.configured || !p.ok) {
-      lines.push(`${p.label.padEnd(provPad)} ✕ ${p.error ?? "未配置"}`);
+      lines.push(`${padVisible(p.label, provPad)}✕ ${p.error ?? "未配置"}`);
       continue;
     }
     p.meters.forEach((m, i) => {
-      const head = i === 0 ? p.label.padEnd(provPad) : blank;
-      lines.push(`${head} ${meterLine(m)}`);
+      const head = i === 0 ? padVisible(p.label, provPad) : blank;
+      const label = m.id === "deepseek.balance" ? "" : `${m.label} `;
+      lines.push(`${head}${label}${meterLine(m)}`);
     });
   }
-
-  // 人民币参考价（DeepSeek / Z.AI 官网公开价）
-  lines.push(cnyPriceLine());
 
   // 对比上次（单行）
   const prevTs = report.prev?.ts;

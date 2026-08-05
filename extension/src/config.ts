@@ -23,7 +23,7 @@ export interface SyncConfig {
     includeConfigs: string[];
     autoInstallPackages: boolean;
     pruneTombstonesAfterDays: number;
-    /** 不同步工具输出（上传时占位，本地文件保持完整） */
+    /** 不同步工具输出与工具调用块（只保留用量元数据，本地文件保持完整） */
     stripToolOutputs: boolean;
     /** 不同步思考过程（上传时移除 thinking 块） */
     stripThinking: boolean;

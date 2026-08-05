@@ -39,7 +39,9 @@ export function registerAdminRoutes(app: FastifyInstance, dbs: SyncDb) {
     const counts = {
       objects: (dbs.db.prepare(`SELECT COUNT(*) c FROM objects`).get() as { c: number }).c,
       sessions: (dbs.db.prepare(`SELECT COUNT(*) c FROM session_headers`).get() as { c: number }).c,
+      prunedSessions: (dbs.db.prepare(`SELECT COUNT(*) c FROM session_headers WHERE content_pruned = 1`).get() as { c: number }).c,
       entries: (dbs.db.prepare(`SELECT COUNT(*) c FROM session_entries`).get() as { c: number }).c,
+      usageRows: (dbs.db.prepare(`SELECT COUNT(*) c FROM session_usage`).get() as { c: number }).c,
       conflicts: (dbs.db.prepare(`SELECT COUNT(*) c FROM conflicts`).get() as { c: number }).c,
       devices: (dbs.db.prepare(`SELECT COUNT(*) c FROM devices`).get() as { c: number }).c,
     };

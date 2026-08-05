@@ -78,6 +78,22 @@ test("health check", async (t) => {
   assert.equal(j.ok, true);
 });
 
+test("web console serves the upgraded dashboard shell", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+  const res = await fetch(`${ctx.base}/web`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") ?? "", /text\/html/);
+  const html = await res.text();
+  assert.match(html, /pi-cloud-sync · 控制台/);
+  assert.match(html, /data-view="devices"/);
+  assert.match(html, /id="conflictDialog"/);
+  assert.match(html, /chart\.js@4\.4\.7/);
+  assert.match(html, /marked@15\.0\.7/);
+  assert.match(html, /dompurify@3\.2\.6/);
+  assert.match(html, /id="deleteSessionsDialog"/);
+});
+
 test("auth required", async (t) => {
   const ctx = await boot();
   t.after(async () => { await ctx.stop(); });
@@ -767,4 +783,141 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
   // 未认证 → 401
   const denied = await fetch(`${ctx.base}/api/v1/web/stats`);
   assert.equal(denied.status, 401);
+});
+
+test("web sessions: server pagination, readable messages and bulk content pruning", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  const push = (sessions: unknown[]) => fetch(`${ctx.base}/api/v1/sessions/push`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ sessions }),
+  });
+  const message = (id: string, role: string, content: unknown, usage?: unknown) => ({
+    id,
+    parentId: null,
+    lineJson: JSON.stringify({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: "2025-07-01T10:00:00.000Z",
+      message: { role, provider: "provider-a", model: "model-a", content, usage },
+    }),
+  });
+
+  await push([
+    {
+      uuid: "readable-a",
+      cwd: "/secret/project-a",
+      name: "Alpha",
+      baseVersion: 0,
+      entries: [
+        message("u1", "user", "# 问题\n\n请给出答案"),
+        message("a1", "assistant", [
+          { type: "toolCall", name: "shell", arguments: { command: "secret" } },
+          { type: "text", text: "**最终答案**" },
+        ], { input: 10, output: 5, totalTokens: 15, cost: { total: 0.01 } }),
+        message("t1", "toolResult", [{ type: "text", text: "HUGE TOOL OUTPUT" }], {
+          input: 20, output: 5, totalTokens: 25, cost: { total: 0.02 },
+        }),
+        message("a2", "assistant", [{ type: "toolCall", name: "shell" }], {
+          input: 3, output: 2, totalTokens: 5, cost: { total: 0.003 },
+        }),
+      ],
+      mtime: Date.now(),
+    },
+    { uuid: "readable-b", cwd: "/b", name: "Beta", baseVersion: 0, entries: [message("u2", "user", "B")], mtime: Date.now() },
+    { uuid: "readable-c", cwd: "/c", name: "Gamma", baseVersion: 0, entries: [message("u3", "user", "C")], mtime: Date.now() },
+  ]);
+
+  const page = await fetch(`${ctx.base}/api/v1/web/sessions?page=2&limit=2&status=active&sort=name-asc`, {
+    headers: { authorization: `Bearer ${ctx.token}` },
+  });
+  const pageJson = (await page.json()) as {
+    data: { items: Array<{ uuid: string }>; page: number; pageSize: number; total: number; totalPages: number };
+  };
+  assert.equal(pageJson.data.total, 3);
+  assert.equal(pageJson.data.totalPages, 2);
+  assert.equal(pageJson.data.page, 2);
+  assert.deepEqual(pageJson.data.items.map((item) => item.uuid), ["readable-c"]);
+
+  const detail = await fetch(`${ctx.base}/api/v1/web/sessions/readable-a?limit=1&offset=1`, {
+    headers: { authorization: `Bearer ${ctx.token}` },
+  });
+  const detailJson = (await detail.json()) as {
+    data: { total: number; rawTotal: number; entries: Array<{ role: string; text: string }> };
+  };
+  assert.equal(detailJson.data.rawTotal, 4);
+  assert.equal(detailJson.data.total, 2);
+  assert.equal(detailJson.data.entries.length, 1);
+  assert.equal(detailJson.data.entries[0].role, "assistant");
+  assert.equal(detailJson.data.entries[0].text, "**最终答案**");
+  assert.ok(!JSON.stringify(detailJson.data).includes("HUGE TOOL OUTPUT"));
+  assert.ok(!JSON.stringify(detailJson.data).includes("调用工具"));
+
+  const beforeStats = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, {
+    headers: { authorization: `Bearer ${ctx.token}` },
+  });
+  const beforeStatsJson = (await beforeStats.json()) as { data: { summary: { requests: number; totalTokens: number; cost: number } } };
+  assert.equal(beforeStatsJson.data.summary.requests, 3);
+  assert.equal(beforeStatsJson.data.summary.totalTokens, 45);
+
+  const deleted = await fetch(`${ctx.base}/api/v1/web/sessions/delete`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ uuids: ["readable-a"], confirm: true }),
+  });
+  const deletedJson = (await deleted.json()) as { data: { pruned: number; usageRows: number } };
+  assert.equal(deletedJson.data.pruned, 1);
+  assert.equal(deletedJson.data.usageRows, 3);
+
+  const prunedDetail = await fetch(`${ctx.base}/api/v1/web/sessions/readable-a`, {
+    headers: { authorization: `Bearer ${ctx.token}` },
+  });
+  const prunedJson = (await prunedDetail.json()) as {
+    data: {
+      deleted: boolean;
+      contentPruned: boolean;
+      cwd: string;
+      name: string | null;
+      total: number;
+      rawTotal: number;
+      usageSummary: { requests: number; totalTokens: number; cost: number };
+    };
+  };
+  assert.equal(prunedJson.data.deleted, true);
+  assert.equal(prunedJson.data.contentPruned, true);
+  assert.equal(prunedJson.data.cwd, "");
+  assert.equal(prunedJson.data.name, null);
+  assert.equal(prunedJson.data.total, 0);
+  assert.equal(prunedJson.data.rawTotal, 0);
+  assert.equal(prunedJson.data.usageSummary.requests, 3);
+  assert.equal(prunedJson.data.usageSummary.totalTokens, 45);
+
+  const afterStats = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, {
+    headers: { authorization: `Bearer ${ctx.token}` },
+  });
+  const afterStatsJson = (await afterStats.json()) as { data: { summary: { requests: number; totalTokens: number; cost: number } } };
+  assert.deepEqual(afterStatsJson.data.summary, beforeStatsJson.data.summary);
+
+  const stalePush = await push([{
+    uuid: "readable-a",
+    cwd: "/secret/revived",
+    name: "Should not revive",
+    baseVersion: 1,
+    entries: [message("u-secret", "user", "must not return")],
+    mtime: Date.now(),
+  }]);
+  const staleJson = (await stalePush.json()) as { data: { sessions: Array<{ deleted: boolean; acceptedEntries: number }> } };
+  assert.equal(staleJson.data.sessions[0].deleted, true);
+  assert.equal(staleJson.data.sessions[0].acceptedEntries, 0);
+
+  const restore = await fetch(`${ctx.base}/api/v1/sessions/restore`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ uuid: "readable-a" }),
+  });
+  const restoreJson = (await restore.json()) as { data: { restored: boolean } };
+  assert.equal(restoreJson.data.restored, false, "正文已裁剪的会话不可伪恢复");
 });

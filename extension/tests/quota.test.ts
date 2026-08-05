@@ -208,6 +208,94 @@ test("quota: codex weekly + 5h from wham/usage", async () => {
   assert.ok(weekly.resetsAt! > 1e12);
 });
 
+test("quota: codex classifies a weekly-only primary window", async () => {
+  const dir = tempAgentDir();
+  setupCodexAuth(dir);
+
+  const res = await probeCodex(
+    mockFetch([
+      {
+        match: "wham/usage",
+        respond: () =>
+          jsonResponse({
+            plan_type: "pro",
+            rate_limit: {
+              primary_window: {
+                used_percent: 18,
+                limit_window_seconds: 604800,
+                reset_after_seconds: 3600,
+              },
+              secondary_window: null,
+            },
+          }),
+      },
+    ]),
+  );
+
+  assert.equal(res.ok, true);
+  assert.equal(res.label, "Codex (pro)");
+  assert.equal(res.meters.find((m) => m.id === "codex.weekly")?.usedPct, 18);
+  assert.equal(res.meters.some((m) => m.id === "codex.fiveHour"), false);
+  assert.ok(res.meters[0].resetsAt! > Date.now());
+});
+
+test("quota: codex accepts camel-case app-server snapshots", async () => {
+  const dir = tempAgentDir();
+  setupCodexAuth(dir);
+
+  const res = await probeCodex(
+    mockFetch([
+      {
+        match: "wham/usage",
+        respond: () =>
+          jsonResponse({
+            rateLimits: {
+              primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 9999999999 },
+              secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 9999999999 },
+            },
+          }),
+      },
+    ]),
+  );
+
+  assert.equal(res.ok, true);
+  assert.equal(res.meters.find((m) => m.id === "codex.fiveHour")?.usedPct, 25);
+  assert.equal(res.meters.find((m) => m.id === "codex.weekly")?.usedPct, 40);
+});
+
+test("quota: codex exposes additional limits and reset credits", async () => {
+  const dir = tempAgentDir();
+  setupCodexAuth(dir);
+
+  const res = await probeCodex(
+    mockFetch([
+      {
+        match: "wham/usage",
+        respond: () =>
+          jsonResponse({
+            plan_type: "prolite",
+            rate_limit: null,
+            additional_rate_limits: [
+              {
+                limit_name: "Codex Spark",
+                metered_feature: "codex_spark",
+                rate_limit: {
+                  primary_window: { used_percent: 12, limit_window_seconds: 604800, reset_at: 9999999999 },
+                },
+              },
+            ],
+            rate_limit_reset_credits: { available_count: 2 },
+          }),
+      },
+    ]),
+  );
+
+  assert.equal(res.ok, true);
+  assert.equal(res.label, "Codex (prolite)");
+  assert.equal(res.meters.find((m) => m.id.includes("codex.additional.codex.spark.weekly"))?.usedPct, 12);
+  assert.equal(res.meters.find((m) => m.id === "codex.resetCredits")?.current, 2);
+});
+
 test("quota: codex not logged in -> ok=false with hint", async () => {
   const dir = tempAgentDir();
   process.env.CODEX_HOME = join(dir, "empty-codex");
@@ -288,6 +376,7 @@ test("quota: codex failure allowed in orchestration (does not break others)", as
   const text = formatQuotaText(r);
   assert.match(text, /DeepSeek/);
   assert.match(text, /Codex/);
+  assert.ok(!text.includes("参考价"), "额度输出不应混入模型参考价格");
   // 紧凑展示：一屏可看完（每渠道一行，无渠道分隔空行）
   assert.ok(text.split("\n").length <= 6, `quota 文本应紧凑，实际 ${text.split("\n").length} 行`);
   assert.ok(!text.includes("─ "), "不应有渠道分隔行");
