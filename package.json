@@ -1,0 +1,27 @@
+{
+  "name": "pi-cloud-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted cloud sync + usage statistics for the pi coding agent",
+  "pi": {
+    "extensions": ["./extension/src/index.ts"]
+  },
+  "workspaces": [
+    "shared",
+    "server",
+    "extension"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=shared && npm run build --workspace=server",
+    "test": "npm run test --workspace=server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "pm2:start": "npm run pm2:start --workspace=server",
+    "pm2:restart": "npm run pm2:restart --workspace=server",
+    "pm2:stop": "npm run pm2:stop --workspace=server",
+    "pm2:logs": "npm run pm2:logs --workspace=server"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true,
+    "esbuild@0.28.1": true
+  }
+}

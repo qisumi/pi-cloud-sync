@@ -1,0 +1,18 @@
+services:
+  sync-server:
+    build: .
+    container_name: pi-cloud-sync
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      SYNC_HOST: "0.0.0.0"
+      SYNC_PORT: "8787"
+      # 访问令牌（客户端连接用）。不设置则首次启动生成到 data/token.txt
+      SYNC_TOKEN: ""
+      # 管理令牌（创建/撤销客户端令牌用）。不设置则管理 API 不可用
+      SYNC_ADMIN_TOKEN: ""
+      # 可选：对外暴露的 URL（用于文档提示）
+      SYNC_PUBLIC_URL: "https://sync.example.com"
+    volumes:
+      - ./data:/app/data
