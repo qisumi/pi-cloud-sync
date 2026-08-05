@@ -106,3 +106,13 @@ const padVisible = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visL
 - 数据格式：tokens 用 `fmtNum`（k/M/B），费用用 `fmtCost`（cny=¥ / usd=$）；金额展示保留 4 位小数（`$0.1234`）。
 - 服务器 API 改动需同步更新 `shared/src/index.ts` 协议类型与 `docs/protocol.md`。
 - 改完记得跑 `npm run typecheck && npm test`（extension）与 server 测试。
+
+## 网页端（server/static/web.html）约定
+
+- 图标统一用 **Lucide**（jsdelivr UMD，`<script defer src="…/lucide@0.469.0/dist/umd/lucide.min.js">`），**禁止新增自绘 Unicode 字符当图标**（⌁◫⌘◇ 等历史遗留已替换）。
+  - 写法：`<i data-lucide="icon-name" aria-hidden="true">fallback字符</i>`，字符作为 CDN 加载失败的兑底。
+  - 动态 innerHTML 生成图标后必须调 `refreshIcons()`（封装 `window.lucide.createIcons()`）；静态图标在初始化时调一次。
+  - 图标尺寸用 CSS 控制（`svg.lucide { width: 1em; height: 1em }` + 各容器单独尺寸）。
+- 货币：**默认人民币 ¥**（`fmtCost`），顶部 topbar 的 `currencySelect` 可切 USD；汇率来自 `open.er-api.com`（localStorage 6h 缓存，失败保留旧缓存）；**fallback 用构建时从 API 获取的真实汇率（`USD_CNY_FALLBACK`），不要写死 7.15**。
+- 模型/设备分布条（`.bar-row`）是纯展示，无点击筛选交互；如需筛选用顶部 `deviceSelect` / `modelSelect`。
+- 新增 CDN 依赖与 chart.js / marked / dompurify / lucide 并列在 head，版本号固定（不用 latest）。

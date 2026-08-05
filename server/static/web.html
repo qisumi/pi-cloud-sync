@@ -10,6 +10,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 <style>
   :root {
     --bg: #0b111b;
@@ -236,6 +237,17 @@
   .nav-item.active { color: var(--text); background: var(--brand-soft); }
   .nav-item.active::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 3px; border-radius: 3px; background: var(--brand); }
   .nav-icon { width: 23px; height: 23px; display: grid; place-items: center; color: currentColor; font-size: 16px; }
+  /* lucide 图标：尺寸跟随容器，动态内容渲染后需 refreshIcons() 重建 */
+  svg.lucide { width: 1em; height: 1em; vertical-align: -.125em; }
+  .nav-icon svg { width: 16px; height: 16px; }
+  .search-glyph svg { width: 15px; height: 15px; }
+  .empty-glyph svg { width: 22px; height: 22px; }
+  .metric-icon svg { width: 17px; height: 17px; }
+  .recent-icon svg { width: 18px; height: 18px; }
+  .device-avatar svg { width: 19px; height: 19px; }
+  .btn-glyph svg, .btn.icon-only svg { width: 15px; height: 15px; }
+  .conflict-state svg { width: 15px; height: 15px; }
+  .toast > span:first-child svg { width: 14px; height: 14px; }
   .nav-text { flex: 1; font-weight: 650; }
   .nav-badge { min-width: 22px; padding: 1px 6px; border-radius: 999px; background: var(--surface-raised); color: var(--muted); font-size: 10px; text-align: center; }
   .nav-badge.alert { color: var(--amber); background: var(--amber-soft); }
@@ -351,10 +363,9 @@
   .chart-fallback-bar { flex: 1; min-width: 3px; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--brand), rgba(53, 185, 157, .25)); }
   .bar-list { display: flex; flex-direction: column; gap: 13px; }
   .bar-row {
-    width: 100%; padding: 0; display: grid; grid-template-columns: minmax(80px, 125px) 1fr 62px; align-items: center; gap: 10px;
-    border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left;
+    width: 100%; display: grid; grid-template-columns: minmax(80px, 125px) 1fr 62px; align-items: center; gap: 10px;
+    color: inherit;
   }
-  .bar-row:hover .bar-label { color: var(--brand); }
   .bar-label { overflow: hidden; color: var(--text-soft); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; transition: color .15s; }
   .bar-track { height: 9px; overflow: hidden; border-radius: 999px; background: var(--bg-soft); }
   .bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand-strong), var(--brand)); transform-origin: left; animation: grow .45s ease-out; }
@@ -621,7 +632,7 @@
         <span class="security-note">令牌仅保存在当前浏览器，不会发送到第三方。</span>
       </div>
       <div id="authError" class="auth-error" role="alert" aria-live="polite"></div>
-      <button id="connectButton" class="btn primary block" type="submit"><span class="btn-glyph">→</span><span>连接服务器</span></button>
+      <button id="connectButton" class="btn primary block" type="submit"><span class="btn-glyph"><i data-lucide="arrow-right" aria-hidden="true">→</i></span><span>连接服务器</span></button>
     </form>
   </div>
 </section>
@@ -634,10 +645,10 @@
     </div>
     <div class="nav-label">Workspace</div>
     <nav class="nav-list" aria-label="控制台导航">
-      <button class="nav-item active" data-view="overview"><span class="nav-icon">⌁</span><span class="nav-text">用量总览</span></button>
-      <button class="nav-item" data-view="sessions"><span class="nav-icon">◫</span><span class="nav-text">会话</span><span id="sessionsBadge" class="nav-badge">0</span></button>
-      <button class="nav-item" data-view="devices"><span class="nav-icon">⌘</span><span class="nav-text">设备</span><span id="devicesBadge" class="nav-badge">0</span></button>
-      <button class="nav-item" data-view="conflicts"><span class="nav-icon">◇</span><span class="nav-text">冲突</span><span id="conflictsBadge" class="nav-badge">0</span></button>
+      <button class="nav-item active" data-view="overview"><span class="nav-icon"><i data-lucide="activity" aria-hidden="true">⌁</i></span><span class="nav-text">用量总览</span></button>
+      <button class="nav-item" data-view="sessions"><span class="nav-icon"><i data-lucide="messages-square" aria-hidden="true">◫</i></span><span class="nav-text">会话</span><span id="sessionsBadge" class="nav-badge">0</span></button>
+      <button class="nav-item" data-view="devices"><span class="nav-icon"><i data-lucide="monitor" aria-hidden="true">⌘</i></span><span class="nav-text">设备</span><span id="devicesBadge" class="nav-badge">0</span></button>
+      <button class="nav-item" data-view="conflicts"><span class="nav-icon"><i data-lucide="git-merge" aria-hidden="true">◇</i></span><span class="nav-text">冲突</span><span id="conflictsBadge" class="nav-badge">0</span></button>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="server-card">
@@ -645,13 +656,13 @@
       <div id="serverCardMeta" class="server-card-meta">等待服务器状态…</div>
     </div>
     <label class="sidebar-action check"><input id="autoRefresh" type="checkbox"> 每 30 秒自动刷新</label>
-    <button id="logoutButton" class="sidebar-action"><span class="nav-icon">↪</span><span>切换访问令牌</span></button>
+    <button id="logoutButton" class="sidebar-action"><span class="nav-icon"><i data-lucide="key-round" aria-hidden="true">↪</i></span><span>切换访问令牌</span></button>
   </aside>
   <div id="mobileShade" class="mobile-shade hidden"></div>
 
   <div class="workspace">
     <header class="topbar">
-      <button id="mobileMenu" class="btn icon-only mobile-menu" type="button" aria-label="打开导航">☰</button>
+      <button id="mobileMenu" class="btn icon-only mobile-menu" type="button" aria-label="打开导航"><i data-lucide="menu" aria-hidden="true">☰</i></button>
       <div class="topbar-title">
         <h1 id="viewTitle">用量总览</h1>
         <p id="viewSubtitle">聚合所有客户端的 token、费用与请求趋势</p>
@@ -664,12 +675,16 @@
         <option value="light">亮色</option>
         <option value="dark">暗色</option>
       </select>
-      <button id="refreshButton" class="btn" type="button"><span class="btn-glyph">↻</span><span class="desktop-label">刷新</span></button>
+      <select id="currencySelect" class="theme-select" aria-label="货币">
+        <option value="cny">¥ 人民币</option>
+        <option value="usd">$ 美元</option>
+      </select>
+      <button id="refreshButton" class="btn" type="button"><span class="btn-glyph"><i data-lucide="refresh-cw" aria-hidden="true">↻</i></span><span class="desktop-label">刷新</span></button>
     </header>
 
     <main>
       <div id="errorNotice" class="notice hidden" role="alert">
-        <span>!</span><span id="errorNoticeText" class="notice-text"></span><button id="dismissError" type="button" aria-label="关闭">×</button>
+        <span><i data-lucide="circle-alert" aria-hidden="true">!</i></span><span id="errorNoticeText" class="notice-text"></span><button id="dismissError" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true">×</i></button>
       </div>
 
       <section id="page-overview" class="page">
@@ -703,7 +718,7 @@
             <div class="card-head">
               <div class="card-title"><span class="card-title-mark"></span><div><h3>每日趋势</h3><p id="trendCaption">等待数据</p></div></div>
             </div>
-            <div class="card-body"><div id="trendChart" class="chart-wrap"><div class="empty"><span><span class="empty-glyph">⌁</span>正在加载趋势…</span></div></div></div>
+            <div class="card-body"><div id="trendChart" class="chart-wrap"><div class="empty"><span><span class="empty-glyph"><i data-lucide="activity" aria-hidden="true">⌁</i></span>正在加载趋势…</span></div></div></div>
           </article>
           <article class="card">
             <div class="card-head">
@@ -741,7 +756,7 @@
             <div><h2>同步会话</h2><p>按条件分页检索会话，批量管理并阅读干净的对话正文。</p></div>
           </div>
           <div class="toolbar">
-            <div class="search"><span class="search-glyph">⌕</span><input id="sessionSearch" class="input" placeholder="搜索名称、路径或 UUID…" autocomplete="off"></div>
+            <div class="search"><span class="search-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span><input id="sessionSearch" class="input" placeholder="搜索名称、路径或 UUID…" autocomplete="off"></div>
             <select id="sessionSort" aria-label="会话排序">
               <option value="updated-desc">最近更新</option>
               <option value="updated-asc">最早更新</option>
@@ -772,17 +787,17 @@
                 <thead><tr><th class="select-cell"><input id="selectSessionPage" class="row-check" type="checkbox" aria-label="选择当前页"></th><th>会话</th><th class="path-col">项目路径</th><th class="num">同步条目</th><th>最后更新</th><th class="source-col">来源</th></tr></thead>
                 <tbody id="sessionBody"></tbody>
               </table>
-              <div id="sessionEmpty" class="empty hidden"><span><span class="empty-glyph">◫</span>没有符合条件的会话</span></div>
+              <div id="sessionEmpty" class="empty hidden"><span><span class="empty-glyph"><i data-lucide="messages-square" aria-hidden="true">◫</i></span>没有符合条件的会话</span></div>
             </div>
             <div class="pagination"><span id="sessionPageInfo" class="pagination-info"></span><div id="sessionPager" class="pagination-actions"></div></div>
           </div>
         </div>
 
         <div id="sessionDetailView" class="hidden">
-          <div class="page-actions" style="margin-bottom:12px"><button id="backToSessions" class="btn" type="button">← 返回会话</button></div>
+          <div class="page-actions" style="margin-bottom:12px"><button id="backToSessions" class="btn" type="button"><i data-lucide="arrow-left" aria-hidden="true">←</i> 返回会话</button></div>
           <article id="sessionDetailHead" class="card session-detail-head"></article>
           <div class="toolbar">
-            <div class="search"><span class="search-glyph">⌕</span><input id="messageSearch" class="input" placeholder="在本页对话中搜索…" autocomplete="off"></div>
+            <div class="search"><span class="search-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span><input id="messageSearch" class="input" placeholder="在本页对话中搜索…" autocomplete="off"></div>
             <select id="roleFilter" aria-label="筛选消息角色">
               <option value="">全部角色</option>
               <option value="user">用户</option>
@@ -802,7 +817,7 @@
           <div class="page-actions"><span id="deviceSummary" class="result-note"></span></div>
         </div>
         <div class="toolbar">
-          <div class="search"><span class="search-glyph">⌕</span><input id="deviceSearch" class="input" placeholder="搜索设备名、平台或 ID…" autocomplete="off"></div>
+          <div class="search"><span class="search-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span><input id="deviceSearch" class="input" placeholder="搜索设备名、平台或 ID…" autocomplete="off"></div>
           <select id="deviceStatusFilter" aria-label="筛选设备状态"><option value="current">当前设备</option><option value="active">仅 active</option><option value="legacy">仅历史来源</option><option value="merged">已合并</option><option value="all">全部状态</option></select>
           <select id="deviceMergeTarget" aria-label="合并目标设备"><option value="">选择合并目标…</option></select>
           <button id="mergeDevices" class="btn small danger" type="button" disabled>合并所选</button>
@@ -821,7 +836,7 @@
             <button data-conflict-filter="resolved">已解决</button>
             <button data-conflict-filter="all">全部</button>
           </div>
-          <div class="search"><span class="search-glyph">⌕</span><input id="conflictSearch" class="input" placeholder="搜索对象、字段或设备…" autocomplete="off"></div>
+          <div class="search"><span class="search-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span><input id="conflictSearch" class="input" placeholder="搜索对象、字段或设备…" autocomplete="off"></div>
         </div>
         <div id="conflictList" class="conflict-list"></div>
       </section>
@@ -832,7 +847,7 @@
 <dialog id="conflictDialog">
   <div class="dialog-head">
     <div><h3 id="dialogTitle">处理冲突</h3><p id="dialogMeta"></p></div>
-    <button id="closeDialog" class="btn icon-only small" type="button" aria-label="关闭">×</button>
+    <button id="closeDialog" class="btn icon-only small" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true">×</i></button>
   </div>
   <div class="dialog-body">
     <div class="compare-grid">
@@ -857,7 +872,7 @@
 <dialog id="deleteSessionsDialog">
   <div class="dialog-head">
     <div><h3>删除所选会话</h3><p id="deleteSessionsMeta"></p></div>
-    <button id="closeDeleteSessions" class="btn icon-only" type="button" aria-label="关闭">×</button>
+    <button id="closeDeleteSessions" class="btn icon-only" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true">×</i></button>
   </div>
   <div class="dialog-body">
     <div class="delete-warning">
@@ -881,6 +896,11 @@ document.addEventListener('DOMContentLoaded', function () {
   var TOKEN_KEY = 'pisync_token';
   var THEME_KEY = 'pisync_theme';
   var AUTO_KEY = 'pisync_auto_refresh';
+  var CURRENCY_KEY = 'pisync_currency';
+  var RATE_KEY = 'pisync_usd_cny_rate';
+  var RATE_TTL_MS = 6 * 3600 * 1000;
+  // 构建时从 open.er-api.com 获取的最近一次 USD→CNY 汇率（2026-08-05），仅作完全无缓存时的兜底；运行时优先用 API 缓存值
+  var USD_CNY_FALLBACK = 6.762932;
   var DETAIL_PAGE_SIZE = 100;
   var origin = location.origin;
   var token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '';
@@ -921,7 +941,8 @@ document.addEventListener('DOMContentLoaded', function () {
     detailOffset: 0,
     activeConflict: null,
     conflictFilter: 'open',
-    lastUpdated: null
+    lastUpdated: null,
+    currency: 'cny'
   };
   var requestControllers = Object.create(null);
 
@@ -957,12 +978,49 @@ document.addEventListener('DOMContentLoaded', function () {
     return String(Math.round(n));
   }
 
+  function currentRate() {
+    // 优先使用最近一次从 API 获取到的汇率（不限时效，作为持久 fallback），完全无缓存才回退固定值
+    try {
+      var raw = localStorage.getItem(RATE_KEY);
+      if (raw) {
+        var entry = JSON.parse(raw);
+        if (entry && typeof entry.cny === 'number' && entry.cny > 0) return entry.cny;
+      }
+    } catch (_) { }
+    return USD_CNY_FALLBACK;
+  }
+
+  /** 异步刷新 USD→CNY 汇率：缓存 6h 内不重复请求；失败静默保留旧缓存/回退固定值 */
+  function refreshUsdCnyRate() {
+    var cached = null;
+    try {
+      cached = JSON.parse(localStorage.getItem(RATE_KEY) || 'null');
+    } catch (_) { }
+    if (cached && typeof cached.cny === 'number' && Date.now() - cached.at < RATE_TTL_MS) return Promise.resolve(null);
+    return fetch('https://open.er-api.com/v6/latest/USD', { headers: { accept: 'application/json' } })
+      .then(function (res) { if (!res.ok) throw new Error('rate failed'); return res.json(); })
+      .then(function (j) {
+        var cny = Number(j && j.rates && j.rates.CNY);
+        if (!Number.isFinite(cny) || cny <= 0) throw new Error('bad rate');
+        try { localStorage.setItem(RATE_KEY, JSON.stringify({ cny: cny, at: Date.now() })); } catch (_) { }
+        return cny;
+      })
+      .catch(function () { return null; });
+  }
+
   function fmtCost(value) {
     var n = Number(value) || 0;
-    if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-    if (n >= 1) return '$' + n.toFixed(2);
-    if (n >= .01) return '$' + n.toFixed(3);
-    return '$' + n.toFixed(n > 0 ? 4 : 2);
+    var prefix = S.currency === 'cny' ? '¥' : '$';
+    if (S.currency === 'cny') n = n * currentRate();
+    if (n >= 1000) return prefix + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    if (n >= 1) return prefix + n.toFixed(2);
+    if (n >= .01) return prefix + n.toFixed(3);
+    return prefix + n.toFixed(n > 0 ? 4 : 2);
+  }
+
+  /** 重建 Lucide 图标（静态与动态内容统一调用，CDN 未加载时静默） */
+  function refreshIcons() {
+    if (window.lucide) window.lucide.createIcons();
   }
 
   function fmtTime(ts) {
@@ -1001,8 +1059,10 @@ document.addEventListener('DOMContentLoaded', function () {
   function showToast(message, type) {
     var toast = document.createElement('div');
     toast.className = 'toast ' + (type || '');
-    toast.innerHTML = '<span>' + (type === 'error' ? '!' : type === 'success' ? '✓' : '•') + '</span><span>' + esc(message) + '</span>';
+    var iconName = type === 'error' ? 'circle-alert' : type === 'success' ? 'check-circle' : 'info';
+    toast.innerHTML = '<span><i data-lucide="' + iconName + '" aria-hidden="true"></i></span><span>' + esc(message) + '</span>';
     $('toastStack').appendChild(toast);
+    refreshIcons();
     window.setTimeout(function () {
       toast.style.opacity = '0';
       toast.style.transform = 'translateY(5px)';
@@ -1350,15 +1410,15 @@ document.addEventListener('DOMContentLoaded', function () {
     var sum = S.stats.summary;
     var cachePct = sum.totalTokens ? Math.min(100, (sum.cacheRead / sum.totalTokens) * 100) : 0;
     var metrics = [
-      { label: '总 Tokens', value: fmtNum(sum.totalTokens), detail: '输入 ' + fmtNum(sum.input) + ' · 输出 ' + fmtNum(sum.output), glyph: 'T', color: 'var(--brand)', soft: 'var(--brand-soft)' },
-      { label: '估算费用', value: fmtCost(sum.cost), detail: '按消息中的模型计价', glyph: '$', color: 'var(--amber)', soft: 'var(--amber-soft)' },
-      { label: '请求次数', value: fmtNum(sum.requests), detail: sum.sessions + ' 个活跃会话', glyph: '↗', color: 'var(--violet)', soft: 'var(--violet-soft)' },
-      { label: '缓存读取', value: fmtNum(sum.cacheRead), detail: cachePct.toFixed(1) + '% token 占比', glyph: 'C', color: 'var(--blue)', soft: 'var(--blue-soft)' },
-      { label: '客户端', value: fmtNum(sum.devices), detail: S.stats.byModel.length + ' 个模型', glyph: '⌘', color: 'var(--green)', soft: 'var(--green-soft)' }
+      { label: '总 Tokens', value: fmtNum(sum.totalTokens), detail: '输入 ' + fmtNum(sum.input) + ' · 输出 ' + fmtNum(sum.output), glyph: 'binary', color: 'var(--brand)', soft: 'var(--brand-soft)' },
+      { label: '估算费用', value: fmtCost(sum.cost), detail: '按消息中的模型计价', glyph: S.currency === 'cny' ? 'yen' : 'circle-dollar-sign', color: 'var(--amber)', soft: 'var(--amber-soft)' },
+      { label: '请求次数', value: fmtNum(sum.requests), detail: sum.sessions + ' 个活跃会话', glyph: 'arrow-up-right', color: 'var(--violet)', soft: 'var(--violet-soft)' },
+      { label: '缓存读取', value: fmtNum(sum.cacheRead), detail: cachePct.toFixed(1) + '% token 占比', glyph: 'database', color: 'var(--blue)', soft: 'var(--blue-soft)' },
+      { label: '客户端', value: fmtNum(sum.devices), detail: S.stats.byModel.length + ' 个模型', glyph: 'monitor', color: 'var(--green)', soft: 'var(--green-soft)' }
     ];
     $('metricGrid').innerHTML = metrics.map(function (metric) {
       return '<article class="metric" style="--metric-color:' + metric.color + ';--metric-soft:' + metric.soft + '">' +
-        '<div class="metric-top"><span class="metric-label">' + esc(metric.label) + '</span><span class="metric-icon">' + esc(metric.glyph) + '</span></div>' +
+        '<div class="metric-top"><span class="metric-label">' + esc(metric.label) + '</span><span class="metric-icon"><i data-lucide="' + esc(metric.glyph) + '" aria-hidden="true"></i></span></div>' +
         '<div class="metric-value">' + esc(metric.value) + '</div><div class="metric-detail">' + esc(metric.detail) + '</div></article>';
     }).join('');
 
@@ -1381,6 +1441,7 @@ document.addEventListener('DOMContentLoaded', function () {
     renderBreakdown($('modelTable'), S.stats.byModel, 'model', '模型');
     renderBreakdown($('deviceTable'), S.stats.byDevice, 'device', '设备');
     renderRecent();
+    refreshIcons();
   }
 
   function downsample(points, max) {
@@ -1408,7 +1469,7 @@ document.addEventListener('DOMContentLoaded', function () {
       chartInstance = null;
     }
     if (!points.length) {
-      host.innerHTML = '<div class="empty"><span><span class="empty-glyph">⌁</span>当前范围内暂无用量数据</span></div>';
+      host.innerHTML = '<div class="empty"><span><span class="empty-glyph"><i data-lucide="activity" aria-hidden="true">⌁</i></span>当前范围内暂无用量数据</span></div>';
       $('trendCaption').textContent = '没有可展示的数据';
       return;
     }
@@ -1494,10 +1555,9 @@ document.addEventListener('DOMContentLoaded', function () {
     var max = Math.max.apply(Math, top.map(function (row) { return row.total || 0; }).concat([1]));
     host.innerHTML = top.map(function (row) {
       var label = row[key] || '(unknown)';
-      var filterValue = key === 'device' ? row.deviceId : label;
-      return '<button class="bar-row" type="button" data-bar-kind="' + esc(key) + '" data-bar-value="' + esc(filterValue) + '" title="筛选 ' + esc(label) + '">' +
+      return '<div class="bar-row">' +
         '<span class="bar-label">' + esc(label) + '</span><span class="bar-track"><span class="bar-fill ' + (violet ? 'violet' : '') + '" style="width:' + Math.max(1, (row.total || 0) / max * 100).toFixed(1) + '%"></span></span>' +
-        '<span class="bar-value">' + esc(fmtNum(row.total)) + '</span></button>';
+        '<span class="bar-value">' + esc(fmtNum(row.total)) + '</span></div>';
     }).join('');
   }
 
@@ -1517,13 +1577,13 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderRecent() {
     var rows = S.sessions.filter(function (session) { return !session.deleted; }).slice(0, 7);
     if (!rows.length) {
-      $('recentSessions').innerHTML = '<div class="empty"><span><span class="empty-glyph">◫</span>暂无同步会话</span></div>';
+      $('recentSessions').innerHTML = '<div class="empty"><span><span class="empty-glyph"><i data-lucide="messages-square" aria-hidden="true">◫</i></span>暂无同步会话</span></div>';
       return;
     }
     $('recentSessions').innerHTML = rows.map(function (session) {
       var name = session.name || session.uuid.slice(0, 8);
       return '<button class="recent-item" type="button" data-open-session="' + esc(session.uuid) + '">' +
-        '<span class="recent-icon">◫</span><span class="recent-copy"><span class="recent-name">' + esc(name) + '</span>' +
+        '<span class="recent-icon"><i data-lucide="messages-square" aria-hidden="true">◫</i></span><span class="recent-copy"><span class="recent-name">' + esc(name) + '</span>' +
         '<span class="recent-meta">' + esc(truncate(session.cwd, 48)) + ' · ' + esc(fmtRelative(session.updatedAt)) + '</span></span>' +
         '<span class="recent-count">' + fmtFull(session.entryCount) + ' 条</span></button>';
     }).join('');
@@ -1556,6 +1616,7 @@ document.addEventListener('DOMContentLoaded', function () {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     });
     updateSessionSelection();
+    refreshIcons();
   }
 
   function updateSessionSelection() {
@@ -1573,13 +1634,13 @@ document.addEventListener('DOMContentLoaded', function () {
     host.innerHTML = '';
     var previous = document.createElement('button');
     previous.className = 'btn small';
-    previous.textContent = '←';
+    previous.innerHTML = '<i data-lucide="chevron-left" aria-hidden="true">←</i>';
     previous.title = '上一页';
     previous.disabled = page <= 1;
     previous.onclick = function () { onChange(page - 1); };
     var next = document.createElement('button');
     next.className = 'btn small';
-    next.textContent = '→';
+    next.innerHTML = '<i data-lucide="chevron-right" aria-hidden="true">→</i>';
     next.title = '下一页';
     next.disabled = page >= total;
     next.onclick = function () { onChange(page + 1); };
@@ -1691,7 +1752,7 @@ document.addEventListener('DOMContentLoaded', function () {
     $('messageResultCount').textContent = rows.length + ' / ' + detail.entries.length + ' 条';
     if (!rows.length) {
       var emptyCopy = detail.contentPruned ? '正文已删除，用量摘要仍保留在总览中' : '本页没有匹配的对话消息';
-      $('messageList').innerHTML = '<div class="card empty"><span><span class="empty-glyph">⌕</span>' + esc(emptyCopy) + '</span></div>';
+      $('messageList').innerHTML = '<div class="card empty"><span><span class="empty-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span>' + esc(emptyCopy) + '</span></div>';
       return;
     }
     $('messageList').innerHTML = rows.map(function (item) {
@@ -1714,6 +1775,7 @@ document.addEventListener('DOMContentLoaded', function () {
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
     });
+    refreshIcons();
   }
 
   function showSessionList(updateHash) {
@@ -1760,10 +1822,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function platformGlyph(platform) {
     var value = String(platform || '').toLowerCase();
-    if (value.indexOf('win') >= 0) return '⊞';
-    if (value.indexOf('darwin') >= 0 || value.indexOf('mac') >= 0) return '⌘';
-    if (value.indexOf('linux') >= 0) return '⌁';
-    return '◈';
+    if (value.indexOf('win') >= 0) return 'windows';
+    if (value.indexOf('darwin') >= 0 || value.indexOf('mac') >= 0) return 'apple';
+    if (value.indexOf('linux') >= 0) return 'linux';
+    return 'terminal';
   }
 
   function renderDevices() {
@@ -1788,14 +1850,15 @@ document.addEventListener('DOMContentLoaded', function () {
     if (Array.from($('deviceMergeTarget').options).some(function (option) { return option.value === targetValue; })) $('deviceMergeTarget').value = targetValue;
     $('mergeDevices').disabled = S.selectedDevices.size === 0 || !$('deviceMergeTarget').value;
     if (!rows.length) {
-      $('deviceGrid').innerHTML = '<div class="card empty"><span><span class="empty-glyph">⌘</span>没有符合条件的设备</span></div>';
+      $('deviceGrid').innerHTML = '<div class="card empty"><span><span class="empty-glyph"><i data-lucide="monitor" aria-hidden="true">⌘</i></span>没有符合条件的设备</span></div>';
+      refreshIcons();
       return;
     }
     $('deviceGrid').innerHTML = rows.map(function (device) {
       var online = Date.now() - device.lastSeen < 5 * 60 * 1000;
       var selectable = device.status !== 'merged';
       return '<article class="card device-card"><div class="device-top"><input class="device-select" type="checkbox" data-select-device="' + esc(device.deviceId) + '"' + (S.selectedDevices.has(device.deviceId) ? ' checked' : '') + (selectable ? '' : ' disabled') + ' aria-label="选择设备">' +
-        '<div class="device-avatar">' + platformGlyph(device.platform) + '</div>' +
+        '<div class="device-avatar"><i data-lucide="' + platformGlyph(device.platform) + '" aria-hidden="true">◈</i></div>' +
         '<div class="device-main"><div class="device-name">' + esc(device.name || '未命名设备') + '</div><div class="device-platform">' + esc(device.platform || '未知平台') + '</div></div>' +
         '<div class="device-status ' + (online && device.status === 'active' ? 'online' : '') + '"><span class="status-dot ' + (online && device.status === 'active' ? 'online' : '') + '"></span>' + esc(device.status) + '</div></div>' +
         '<div class="device-facts"><div class="device-fact"><span>会话 / 条目</span><strong>' + fmtFull(device.sessionCount) + ' / ' + fmtFull(device.entryCount) + '</strong></div>' +
@@ -1806,6 +1869,7 @@ document.addEventListener('DOMContentLoaded', function () {
         '<div class="device-id-row"><span class="device-id" title="' + esc(device.deviceId) + '">' + esc(device.deviceId) + '</span><button class="btn small" type="button" data-copy-text="' + esc(device.deviceId) + '">复制 ID</button></div>' +
         '<div class="device-actions">' + (selectable ? '<button class="btn small" type="button" data-rename-device="' + esc(device.deviceId) + '">重命名</button>' : '') + '</div></article>';
     }).join('');
+    refreshIcons();
   }
 
   async function renameDevice(id) {
@@ -1866,12 +1930,13 @@ document.addEventListener('DOMContentLoaded', function () {
     var openCount = S.conflicts.filter(function (item) { return !item.resolvedAt; }).length;
     $('conflictSummary').textContent = openCount ? openCount + ' 项待处理' : '没有待处理冲突';
     if (!rows.length) {
-      $('conflictList').innerHTML = '<div class="card empty"><span><span class="empty-glyph">◇</span>' + (S.conflictFilter === 'open' ? '当前没有待处理冲突' : '没有符合条件的冲突') + '</span></div>';
+      $('conflictList').innerHTML = '<div class="card empty"><span><span class="empty-glyph"><i data-lucide="git-merge" aria-hidden="true">◇</i></span>' + (S.conflictFilter === 'open' ? '当前没有待处理冲突' : '没有符合条件的冲突') + '</span></div>';
+      refreshIcons();
       return;
     }
     $('conflictList').innerHTML = rows.map(function (conflict) {
       var resolved = !!conflict.resolvedAt;
-      return '<article class="card conflict-card ' + (resolved ? 'resolved' : '') + '"><div class="conflict-top"><div class="conflict-state">' + (resolved ? '✓' : '◇') + '</div>' +
+      return '<article class="card conflict-card ' + (resolved ? 'resolved' : '') + '"><div class="conflict-top"><div class="conflict-state"><i data-lucide="' + (resolved ? 'check' : 'git-merge') + '" aria-hidden="true"></i></div>' +
         '<div class="conflict-main"><div class="conflict-title"><span>' + esc(conflict.objectKey || '未命名对象') + '</span><span class="badge ' + (resolved ? 'success' : 'warning') + '">' + (resolved ? '已解决' : '待处理') + '</span><span class="badge">' + esc(conflict.kind) + '</span></div>' +
         '<div class="conflict-path">' + esc(conflict.path || '(整体内容)') + '</div><div class="conflict-meta"><span>' + esc(conflict.deviceA || 'A') + ' ↔ ' + esc(conflict.deviceB || 'B') + '</span><span>发现于 ' + esc(fmtTime(conflict.createdAt)) + '</span>' +
         (resolved ? '<span>方案 ' + esc(conflict.resolution || '-') + '</span>' : '') + '</div></div>' +
@@ -1879,6 +1944,7 @@ document.addEventListener('DOMContentLoaded', function () {
         '<div class="conflict-preview"><div class="preview-pane"><strong>' + esc(conflict.deviceA || '版本 A') + '</strong><code>' + esc(truncate(prettyContent(conflict.contentA), 150)) + '</code></div>' +
         '<div class="preview-pane"><strong>' + esc(conflict.deviceB || '版本 B') + '</strong><code>' + esc(truncate(prettyContent(conflict.contentB), 150)) + '</code></div></div></article>';
     }).join('');
+    refreshIcons();
   }
 
   function openConflict(id) {
@@ -1957,6 +2023,12 @@ document.addEventListener('DOMContentLoaded', function () {
   $('autoRefresh').checked = localStorage.getItem(AUTO_KEY) === '1';
   applyTheme();
   setupAutoRefresh();
+  // 货币：默认人民币（¥），本地存储记忆选择；异步刷新汇率后重算显示
+  S.currency = localStorage.getItem(CURRENCY_KEY) === 'usd' ? 'usd' : 'cny';
+  $('currencySelect').value = S.currency;
+  refreshUsdCnyRate().then(function (rate) {
+    if (rate && S.currency === 'cny' && S.stats) renderAll();
+  });
   publicHealth().then(function (health) {
     S.health = health;
     setHealth(health, true);
@@ -1987,6 +2059,12 @@ document.addEventListener('DOMContentLoaded', function () {
     localStorage.setItem(THEME_KEY, event.target.value);
     applyTheme();
   };
+  $('currencySelect').onchange = function (event) {
+    S.currency = event.target.value === 'usd' ? 'usd' : 'cny';
+    try { localStorage.setItem(CURRENCY_KEY, S.currency); } catch (_) { }
+    renderAll();
+  };
+  refreshIcons();
   if (mediaDark.addEventListener) mediaDark.addEventListener('change', function () {
     if ((localStorage.getItem(THEME_KEY) || 'system') === 'system') applyTheme();
   });
@@ -2015,12 +2093,6 @@ document.addEventListener('DOMContentLoaded', function () {
   $('page-overview').addEventListener('click', function (event) {
     var sessionButton = event.target.closest('[data-open-session]');
     if (sessionButton) { openSession(sessionButton.dataset.openSession, true); return; }
-    var bar = event.target.closest('[data-bar-kind]');
-    if (bar) {
-      if (bar.dataset.barKind === 'model') S.model = bar.dataset.barValue;
-      else S.device = bar.dataset.barValue;
-      refreshStats();
-    }
   });
 
   // session events
