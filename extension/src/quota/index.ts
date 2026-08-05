@@ -5,6 +5,7 @@
 import type { QuotaProbeResult, QuotaReport, QuotaSnapshot } from "./types.js";
 import { probeDeepSeek, probeZai, probeCodex, type FetchLike } from "./providers.js";
 import { recordSnapshot, toSnapshot, latestSnapshot, computeDeltas } from "./history.js";
+import { cnyPriceLine } from "./prices.js";
 
 /** 并发探测全部渠道（Codex 失败不抛错） */
 export async function probeAllQuotas(fetchImpl?: FetchLike): Promise<QuotaReport> {
@@ -98,6 +99,9 @@ export function formatQuotaText(report: QuotaReport): string {
       lines.push(`${head} ${meterLine(m)}`);
     });
   }
+
+  // 人民币参考价（DeepSeek / Z.AI 官网公开价）
+  lines.push(cnyPriceLine());
 
   // 对比上次（单行）
   const prevTs = report.prev?.ts;

@@ -14,6 +14,7 @@ import { searchLocalSessions, localSessionsIndex } from "./sync/sessions.js";
 import { UsageCollector } from "./stats/collector.js";
 import { scanAllSessions, mergeRecords, buildReport } from "./stats/analyzer.js";
 import { formatReport, formatSessionSummary } from "./stats/report.js";
+import { fetchUsdCnyRate } from "./stats/rates.js";
 import { output, startProgress, quotaDialog } from "./ui.js";
 import { probeAllQuotas, formatQuotaText, quotaSummary } from "./quota/index.js";
 import { writeFileSync } from "node:fs";
@@ -352,7 +353,7 @@ async function cmdUsage(args: string, ctx: ExtensionCommandContext): Promise<str
   let fullView = false;
   // 价格显示货币：默认取配置（cny=¥），可用 --cny / --usd 临时切换
   let currency: "usd" | "cny" = cfg.stats?.currency ?? "cny";
-  let rate = cfg.stats?.usdCnyRate ?? 7.15;
+  let rate = cfg.stats?.usdCnyRate ?? 6.76;
 
   for (const p of parts) {
     if (p === "today") days = 1;
@@ -378,6 +379,12 @@ async function cmdUsage(args: string, ctx: ExtensionCommandContext): Promise<str
   const live = cfg.stats.collect ? collector.loadAll() : [];
   const scanned = scanAllSessions(deviceId);
   const records = mergeRecords(live, scanned);
+
+  // 人民币显示：优先拉取 Exchangerate-API 实时汇率（6h 缓存），失败回退配置值
+  if (currency === "cny") {
+    const liveRate = await fetchUsdCnyRate();
+    if (liveRate) rate = liveRate;
+  }
 
   const sessionId = currentSession ? ctx.sessionManager.getSessionId() : null;
   const report = buildReport(records, { days, groupBySessionTop: top, sessionId });

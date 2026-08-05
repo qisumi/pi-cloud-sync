@@ -9,6 +9,7 @@ import { scanLocalSessions, buildSessionChanges, applyPulledSessions, encodeCwdP
 import { UsageCollector } from "../src/stats/collector.js";
 import { scanSessionFile, mergeRecords, buildReport } from "../src/stats/analyzer.js";
 import { formatReport } from "../src/stats/report.js";
+import { fetchUsdCnyRate, clearRateCache } from "../src/stats/rates.js";
 import type { MergedObject, SessionSnapshot } from "../src/types.js";
 
 function tempAgentDir(): string {
@@ -193,6 +194,37 @@ test("stats: collector dedupe + analyzer aggregation", () => {
   const usd = formatReport(report, "table", { currency: "usd" });
   assert.ok(usd.includes("$"));
   assert.ok(!usd.includes("¥"));
+});
+
+test("stats: usd-cny rate from exchangerate-api (mock), cache, failure fallback", async () => {
+  clearRateCache();
+  // 正常响应：解析 rates.CNY
+  let calls = 0;
+  const okFetch = async () => {
+    calls++;
+    return new Response(
+      JSON.stringify({ result: "success", rates: { USD: 1, CNY: 6.762932 } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const r1 = await fetchUsdCnyRate(okFetch);
+  assert.ok(Math.abs((r1 ?? 0) - 6.762932) < 1e-6);
+  // 6h 缓存：第二次不重新请求
+  const r2 = await fetchUsdCnyRate(okFetch);
+  assert.equal(r2, r1);
+  assert.equal(calls, 1);
+
+  // 失败（网络错误）→ null
+  clearRateCache();
+  const failFetch = async () => {
+    throw new Error("network down");
+  };
+  assert.equal(await fetchUsdCnyRate(failFetch), null);
+
+  // 响应不含 CNY / result=error → null
+  clearRateCache();
+  const badFetch = async () => new Response(JSON.stringify({ result: "error" }), { status: 200 });
+  assert.equal(await fetchUsdCnyRate(badFetch), null);
 });
 
 test("stats: session scan produces records", () => {

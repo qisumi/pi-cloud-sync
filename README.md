@@ -161,7 +161,8 @@ pi -e ./extension/src/index.ts
 
 ## 📊 Usage Statistics / 用量统计
 
-默认直接展示**两张表**（近 7 天：分日 + 分模型），非交互直接输出；价格默认人民币 ¥（`stats.currency`，可 `--cny` / `--usd` 临时切换，汇率 `stats.usdCnyRate`）。
+默认直接展示**两张表**（近 7 天：分日 + 分模型），非交互直接输出；价格默认人民币 ¥（`stats.currency`，可 `--cny` / `--usd` 临时切换）。
+USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchangerate-api.com) 实时汇率**（6 小时缓存），失败回退配置 `stats.usdCnyRate`（默认 6.76）。
 
 ```bash
 /usage                # 默认：近 7 天 · 分日 + 分模型两表 · 非交互直接展示
@@ -223,6 +224,7 @@ pi -e ./extension/src/index.ts
 >  Z.AI GLM 编程套餐      ████░░░░░░ 剩 60% 3.20M/8.00M · 1时10分后重置
 >                        ██████░░░░ 剩 38% 5.00M/8.00M · 3天后重置
 >  Codex (OpenAI 订阅)   ✕ network error
+>  参考价(¥/百万tokens): DeepSeek V4-Pro 入3/出6/缓存0.025 · Z.AI 智谱 GLM-4.7 入2/出8/缓存0.4
 >  对比上次: Z.AI 5h +5%
 > ```
 
@@ -243,7 +245,28 @@ pi -e ./extension/src/index.ts
 
 数据双通道：**实时采集**（消息事件 → `~/.pi/agent/pi-stats.jsonl`，会话清理后仍完整）
 + **会话扫描**（解析历史 `.jsonl` 补齐，自动去重）。费用直接采用 pi 计算的成本（USD），
-显示时按 `stats.usdCnyRate`（默认 7.15）换算为人民币 ¥，可用 `--usd` 查看美元原值。
+显示时优先用 **Exchangerate-API 实时汇率**换算为人民币 ¥，失败回退 `stats.usdCnyRate`（默认 6.76），可用 `--usd` 查看美元原值。
+
+### 💱 参考价格（¥/百万 tokens）
+
+`/quota` 面板会显示一行当前参考价（取各渠道主推模型，官网公开价，仅供估算）：
+
+```
+参考价(¥/百万tokens): DeepSeek V4-Pro 入3/出6/缓存0.025 · Z.AI 智谱 GLM-4.7 入2/出8/缓存0.4
+```
+
+| 渠道 | 模型 | 输入 ¥/M | 输出 ¥/M | 缓存命中 ¥/M | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| **DeepSeek**（官方开放平台，2026-05 永久降价） | V4-Pro | 3 | 6 | 0.025 | 高峰时段(9-12/14-18) ×2 |
+| | V4-Flash | 1 | 2 | 0.02 | |
+| **Z.AI 智谱**（[bigmodel.cn/pricing](https://bigmodel.cn/pricing)，2026-08） | GLM-4.7 | 2 | 8 | 0.4 | ≤32k；32-200k: 入4/出16/缓存0.8 |
+| | GLM-5 | 4 | 18 | 1 | ≤32k |
+| | GLM-5-Turbo | 5 | 22 | 1.2 | ≤32k |
+| | GLM-5.1 | 6 | 24 | 1.3 | ≤32k；32k+: 入8/出28 |
+| | GLM-5.2 | 8 | 28 | 2 | 1M 上下文新品 |
+| | GLM-4.5-Air | 0.8 | 2 | 0.16 | |
+| | GLM-4.7-FlashX | 0.5 | 3 | 0.1 | |
+| | GLM-4.7-Flash | 免费 | 免费 | 免费 | |
 
 ---
 

@@ -4,6 +4,7 @@ import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi
 import type { QuotaReport } from "./quota/index.js";
 import { computeDeltas, toSnapshot } from "./quota/history.js";
 import type { QuotaMeter } from "./quota/types.js";
+import { cnyPriceLine } from "./quota/prices.js";
 
 /**
  * 命令输出助手：
@@ -225,6 +226,9 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
     if (comps.length > 0) {
       rows.push(theme.fg("muted", ` 对比上次: ${comps.join(" · ")}`));
     }
+
+    // 人民币参考价（DeepSeek / Z.AI 官网公开价）
+    rows.push(theme.fg("muted", ` ${cnyPriceLine()}`));
 
     rows.push("");
     rows.push(theme.fg("dim", " Esc 关闭"));
