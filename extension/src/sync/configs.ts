@@ -81,15 +81,19 @@ export function buildConfigChanges(cfg: SyncConfig, state: SyncState): PushChang
     const key = objectKeyForConfig(file);
     ensureObjectState(state, key);
     const st = state.objects[key];
+    const info = statSync(path);
+    if (st.localSha256 && st.localSize === info.size && st.localMtimeMs === info.mtimeMs) continue;
 
     const content = readFileSync(path, "utf8");
     const sha = sha256(content);
+    st.localSize = info.size;
+    st.localMtimeMs = info.mtimeMs;
 
     // 本地未变 → 跳过
     if (st.localSha256 === sha) continue;
     st.localSha256 = sha; // 更新本地基线（无论推送成败都记录，避免反复推送同一内容）
 
-    const mtime = Math.trunc(existsSync(path) ? readFileStat(path) : Date.now());
+    const mtime = Math.trunc(info.mtimeMs);
 
     if (isJsonObject(content)) {
       changes.push({
@@ -175,10 +179,6 @@ function loadPrevJson(st: { fields: Record<string, { version: number; value: str
   return obj;
 }
 
-function readFileStat(path: string): number {
-  return statSync(path).mtimeMs;
-}
-
 /** 将服务器合并结果应用到本地文件，并更新状态 */
 export function applyMergedConfig(
   cfg: SyncConfig,
@@ -200,6 +200,9 @@ export function applyMergedConfig(
   st.baseSha256 = merged.sha256;
   st.localSha256 = merged.sha256;
   st.serverVersion = merged.version;
+  const info = statSync(path);
+  st.localSize = info.size;
+  st.localMtimeMs = info.mtimeMs;
   st.fields = {};
   // 从合并后的内容中提取字段值（供下次 diff 使用）
   let mergedJson: Record<string, unknown> | null = null;

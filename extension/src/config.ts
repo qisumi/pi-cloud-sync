@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -40,17 +40,15 @@ export interface SyncConfig {
     autoName: boolean;
     /** 自动命名最大长度 */
     autoNameMax: number;
-    /** 新会话默认使用订阅内低价模型 */
-    defaultCheapModel: boolean;
-    /** provider → 低价模型 id（按 pi models 目录，可覆盖） */
-    cheapModelByProvider: Record<string, string>;
+    /** provider → 仅供 AI 自动命名使用的低价模型 id */
+    autoNameModelByProvider: Record<string, string>;
   };
   /** 兼容旧版字段（WebDAV 等），保留不动 */
   legacy?: Record<string, unknown>;
 }
 
 const DEFAULTS: SyncConfig = {
-  version: 4,
+  version: 5,
   deviceName: "",
   server: null,
   sync: {
@@ -68,10 +66,9 @@ const DEFAULTS: SyncConfig = {
   session: {
     autoName: true,
     autoNameMax: 32,
-    defaultCheapModel: true,
     // 各订阅内成本相对低的模型（deepseek 目录价 0.14/0.28 vs pro 0.435/0.87；
     // openai-codex 目录价 gpt-5.6-luna 0.2/1.2 最便宜；zai-coding-cn 套餐内 glm-4.7 相对最低）
-    cheapModelByProvider: {
+    autoNameModelByProvider: {
       deepseek: "deepseek-v4-flash",
       "zai-coding-cn": "glm-4.7",
       "openai-codex": "gpt-5.6-luna",
@@ -135,6 +132,25 @@ export function loadConfig(): SyncConfig {
   } else if ((cfg.version ?? 0) < 4) {
     cfg.version = 4;
   }
+  // 迁移：旧“切换主会话低价模型”配置改为“独立 AI 命名模型”。
+  if ((cfg.version ?? 0) < 5) {
+    const legacySession = cfg.session as unknown as {
+      cheapModelByProvider?: Record<string, string>;
+      defaultCheapModel?: boolean;
+      autoNameModelByProvider?: Record<string, string>;
+    };
+    if (legacySession.cheapModelByProvider) {
+      cfg.session.autoNameModelByProvider = legacySession.cheapModelByProvider;
+    }
+    delete legacySession.cheapModelByProvider;
+    delete legacySession.defaultCheapModel;
+    cfg.version = 5;
+    try {
+      saveConfig(cfg);
+    } catch {
+      // ignore
+    }
+  }
   return cfg as SyncConfig;
 }
 
@@ -174,17 +190,23 @@ function loadStateRaw(): Record<string, unknown> {
 
 function saveStateRaw(state: Record<string, unknown>): void {
   mkdirSync(agentDir(), { recursive: true });
-  writeFileSync(statePath(), JSON.stringify(state, null, 2) + "\n", "utf8");
+  const target = statePath();
+  const temporary = `${target}.tmp`;
+  writeFileSync(temporary, JSON.stringify(state) + "\n", "utf8");
+  renameSync(temporary, target);
 }
 
 /* ---------------- 同步状态（游标、字段版本、会话基线） ---------------- */
 
 export interface SyncState {
+  stateVersion: number;
   deviceId?: string;
   /** 上次心跳时间 */
   lastHeartbeat?: number;
   /** 上次 pull 时间（增量拉取游标） */
   lastPullAt?: number;
+  /** v2 会话增量拉取游标 */
+  sessionCursor: number;
   /** 每个对象 key 的客户端状态 */
   objects: Record<
     string,
@@ -195,6 +217,9 @@ export interface SyncState {
       serverVersion: number;
       /** 客户端本地上次推送的内容哈希（用于 diff） */
       localSha256: string | null;
+      /** 最近一次检查的文件元数据；未变化时避免读取和哈希正文 */
+      localSize?: number;
+      localMtimeMs?: number;
       /** 客户端字段版本表：path -> { version, value } */
       fields: Record<string, { version: number; value: string }>;
     }
@@ -204,25 +229,63 @@ export interface SyncState {
     string,
     {
       serverVersion: number;
-      /** 已推送的 entryId 集合 */
-      pushed: string[];
+      /** 相对 sessions 根目录的文件路径 */
+      path?: string;
+      size: number;
+      mtimeMs: number;
+      /** 已确认上传到服务端的完整行字节偏移 */
+      offset: number;
+      headerHash: string;
+      boundaryHash: string;
+      cwd?: string;
+      name?: string | null;
+      createdAt?: number;
+      /** v1 状态迁移时临时读取，保存时不再扩张 */
+      pushed?: string[];
     }
   >;
   /** 包清单上次推送的哈希 */
   packageManifestSha256: string | null;
+  /** 尚未同步到服务端的插件内部用量事件 */
+  pendingUsageEvents: import("./types.js").UsageEventChange[];
+  lastScan?: { files: number; bytesRead: number; durationMs: number; at: number };
 }
 
 export function loadState(): SyncState {
   const raw = loadStateRaw();
   const state: SyncState = {
+    stateVersion: 2,
     deviceId: typeof raw.deviceId === "string" ? raw.deviceId : undefined,
     lastHeartbeat: typeof raw.lastHeartbeat === "number" ? raw.lastHeartbeat : undefined,
     lastPullAt: typeof raw.lastPullAt === "number" ? raw.lastPullAt : undefined,
+    sessionCursor: typeof raw.sessionCursor === "number" ? raw.sessionCursor : 0,
     objects: (raw.objects ?? {}) as SyncState["objects"],
     sessions: (raw.sessions ?? {}) as SyncState["sessions"],
     packageManifestSha256:
       typeof raw.packageManifestSha256 === "string" ? raw.packageManifestSha256 : null,
+    pendingUsageEvents: Array.isArray(raw.pendingUsageEvents)
+      ? (raw.pendingUsageEvents as SyncState["pendingUsageEvents"])
+      : [],
+    lastScan:
+      raw.lastScan && typeof raw.lastScan === "object"
+        ? (raw.lastScan as SyncState["lastScan"])
+        : undefined,
   };
+  for (const session of Object.values(state.sessions)) {
+    session.size = Number(session.size ?? 0);
+    session.mtimeMs = Number(session.mtimeMs ?? 0);
+    session.offset = Number(session.offset ?? 0);
+    session.headerHash = String(session.headerHash ?? "");
+    session.boundaryHash = String(session.boundaryHash ?? "");
+    session.cwd = typeof session.cwd === "string" ? session.cwd : undefined;
+    session.name = typeof session.name === "string" ? session.name : null;
+    session.createdAt = typeof session.createdAt === "number" ? session.createdAt : undefined;
+    delete session.pushed;
+  }
+  for (const object of Object.values(state.objects)) {
+    object.localSize = typeof object.localSize === "number" ? object.localSize : undefined;
+    object.localMtimeMs = typeof object.localMtimeMs === "number" ? object.localMtimeMs : undefined;
+  }
   return state;
 }
 
@@ -239,6 +302,13 @@ export function ensureObjectState(state: SyncState, key: string): void {
 
 export function ensureSessionState(state: SyncState, uuid: string): void {
   if (!state.sessions[uuid]) {
-    state.sessions[uuid] = { serverVersion: 0, pushed: [] };
+    state.sessions[uuid] = {
+      serverVersion: 0,
+      size: 0,
+      mtimeMs: 0,
+      offset: 0,
+      headerHash: "",
+      boundaryHash: "",
+    };
   }
 }

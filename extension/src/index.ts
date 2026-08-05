@@ -10,7 +10,7 @@ import {
   configPath,
 } from "./config.js";
 import { SyncClient } from "./client.js";
-import { push, pull, syncNow, resolveConflict } from "./sync/index.js";
+import { heartbeat, push, pull, syncNow, resolveConflict } from "./sync/index.js";
 import { searchLocalSessions, localSessionsIndex } from "./sync/sessions.js";
 import { UsageCollector } from "./stats/collector.js";
 import { scanAllSessions, mergeRecords, buildReport } from "./stats/analyzer.js";
@@ -20,6 +20,8 @@ import { output, startProgress, quotaDialog } from "./ui.js";
 import { probeAllQuotas, formatQuotaText, quotaSummary } from "./quota/index.js";
 import { registerSessionHooks, sessionStatus, cmdSessionRename } from "./session.js";
 import { writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { pendingInboxCount } from "./sync/sessions.js";
 
 const EXT_VERSION = "0.1.0";
 let cfg: SyncConfig = loadConfig();
@@ -165,12 +167,32 @@ async function cmdSyncDevices(ctx: ExtensionCommandContext): Promise<string> {
     return devices
       .map(
         (d) =>
-          `• ${d.name}  (${d.platform}, pi ${d.piVersion})  上次在线: ${new Date(d.lastSeen).toLocaleString()}`,
+          `• [${d.status}] ${d.name}${d.isLegacy ? "（历史来源）" : ""}  ${d.platform || "-"} · pi ${d.piVersion || "-"}\n` +
+          `  会话 ${d.sessionCount} · 条目 ${d.entryCount} · tokens ${d.totalTokens} · 费用 $${d.totalCost.toFixed(4)} · ${new Date(d.lastSeen).toLocaleString()}` +
+          (d.mergedInto ? `\n  已合并到 ${d.mergedInto}` : ""),
       )
       .join("\n");
   } catch (err) {
     progress?.error(`获取设备列表失败：${(err as Error).message}`);
     return `获取设备列表失败: ${(err as Error).message}`;
+  }
+}
+
+async function cmdSyncDeviceRename(args: string, ctx: ExtensionCommandContext): Promise<string> {
+  const name = args.trim();
+  if (!name) return "用法: /qisumi-sync-device-rename <新设备名>";
+  if (name.length > 128) return "设备名不能超过 128 个字符";
+  cfg.deviceName = name;
+  saveConfig(cfg);
+  if (!serverConfigured()) return `当前设备已重命名为 ${name}（尚未配置服务器）`;
+  const progress = startProgress(ctx, "正在更新设备名称…");
+  try {
+    await heartbeat(cfg, loadState(), client(), "0.83.0", EXT_VERSION);
+    progress?.done();
+    return `当前设备已重命名为 ${name}，服务器心跳已更新。`;
+  } catch (error) {
+    progress?.error(`本地已保存，服务器更新失败：${(error as Error).message}`);
+    return `当前设备已在本地重命名为 ${name}；服务器更新失败，将在下次同步重试。`;
   }
 }
 
@@ -223,13 +245,14 @@ async function cmdSyncStatus(ctx: ExtensionCommandContext): Promise<string> {
     `上次心跳: ${state.lastHeartbeat ? new Date(state.lastHeartbeat).toLocaleString() : "-"}`,
     `上次拉取: ${state.lastPullAt ? new Date(state.lastPullAt).toLocaleString() : "-"}`,
     `已跟踪对象: ${Object.keys(state.objects).length}   会话: ${Object.keys(state.sessions).length}`,
+    `协议: v2   会话游标: ${state.sessionCursor}   inbox: ${pendingInboxCount()}   最近读取: ${state.lastScan?.bytesRead ?? 0} bytes`,
     `统计采集: ${cfg.stats.collect ? "开" : "关"}`,
   ];
   if (serverConfigured()) {
     const progress = startProgress(ctx, "正在获取服务器状态…");
     try {
       const health = await client().health();
-      lines.push(`服务器状态: healthy (${health.version}, 协议 v1)`);
+      lines.push(`服务器状态: healthy (${health.version}, 协议 v${health.protocol})`);
       const conflicts = await client().listConflicts();
       lines.push(`未解决冲突: ${conflicts.filter((c) => !c.resolvedAt).length}`);
       progress?.done();
@@ -260,8 +283,7 @@ function cmdSyncConfigShow(): string {
     `stats.currency: ${cfg.stats.currency}  (--cny/--usd 可临时切换)`,
     `stats.usdCnyRate: ${cfg.stats.usdCnyRate}`,
     `session.autoName: ${cfg.session?.autoName} (最长 ${cfg.session?.autoNameMax ?? 32} 字)`,
-    `session.defaultCheapModel: ${cfg.session?.defaultCheapModel}`,
-    `session.cheapModelByProvider: ${JSON.stringify(cfg.session?.cheapModelByProvider ?? {})}`,
+    `session.autoNameModelByProvider: ${JSON.stringify(cfg.session?.autoNameModelByProvider ?? {})}`,
   ].join("\n");
 }
 
@@ -536,6 +558,7 @@ const SYNC_COMMANDS: Array<[string, string]> = [
   ["/qisumi-sync-conflicts", "查看冲突记录"],
   ["/qisumi-sync-conflicts-resolve <id> keep-a|keep-b", "解决指定冲突"],
   ["/qisumi-sync-devices", "查看已关联设备"],
+  ["/qisumi-sync-device-rename <新设备名>", "重命名当前设备并立即心跳更新"],
   ["/qisumi-sync-find <关键词>", "搜索本地会话"],
   ["/qisumi-sync-list", "列出本地会话"],
   ["/qisumi-sync-restore <uuid>", "恢复已删除会话"],
@@ -617,6 +640,9 @@ export default function (pi: ExtensionAPI) {
     },
   });
   reg("qisumi-sync-devices", "查看已关联设备", (_args, ctx) => cmdSyncDevices(ctx), { title: "设备" });
+  reg("qisumi-sync-device-rename", "重命名当前设备 <新设备名>", (args, ctx) => cmdSyncDeviceRename(args, ctx), {
+    title: "设备重命名",
+  });
   reg("qisumi-sync-find", "搜索本地会话 <关键词>", (args) => Promise.resolve(cmdSyncFind(args)), { title: "搜索会话" });
   reg("qisumi-sync-list", "列出本地会话", () => Promise.resolve(cmdSyncList()), { title: "本地会话" });
   reg("qisumi-sync-restore", "恢复已删除会话 <uuid>", (args) => Promise.resolve(cmdSyncRestore(args)), { title: "恢复会话" });
@@ -644,10 +670,9 @@ export default function (pi: ExtensionAPI) {
         "stats.usdCnyRate",
         "session.autoName",
         "session.autoNameMax",
-        "session.defaultCheapModel",
-        "session.cheapModelByProvider.deepseek",
-        "session.cheapModelByProvider.zai-coding-cn",
-        "session.cheapModelByProvider.openai-codex",
+        "session.autoNameModelByProvider.deepseek",
+        "session.autoNameModelByProvider.zai-coding-cn",
+        "session.autoNameModelByProvider.openai-codex",
       ];
       return keys.filter((k) => k.startsWith(p)).map((value) => ({ value, label: value }));
     },
@@ -691,8 +716,46 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // 会话自动命名 / 新会话低价默认模型
-  registerSessionHooks(pi, () => cfg);
+  // AI 自动命名用量作为独立事件记录，不污染会话正文。
+  registerSessionHooks(pi, () => cfg, (usage) => {
+    const occurredAt = Date.now();
+    const id = randomUUID();
+    collector.record({
+      ts: occurredAt,
+      sessionId: usage.sessionId,
+      sessionName: null,
+      project: "",
+      provider: usage.provider,
+      model: usage.model,
+      usage: {
+        input: usage.input,
+        output: usage.output,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        totalTokens: usage.totalTokens,
+        cost: { total: usage.cost },
+      },
+      role: "assistant",
+      entryId: `auto-name:${id}`,
+      device: cfg.deviceName,
+    });
+    const state = loadState();
+    state.pendingUsageEvents.push({
+      id,
+      sessionUuid: usage.sessionId,
+      occurredAt,
+      provider: usage.provider,
+      model: usage.model,
+      requests: 1,
+      input: usage.input,
+      output: usage.output,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      totalTokens: usage.totalTokens,
+      cost: usage.cost,
+    });
+    saveState(state);
+  });
 
   registerEvents(pi);
 }

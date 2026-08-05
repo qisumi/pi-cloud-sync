@@ -65,6 +65,9 @@ export async function output(
         tui.requestRender();
       },
     };
+  }, {
+    overlay: true,
+    overlayOptions: { anchor: "center", width: "90%", maxHeight: Math.min(items.length + 5, 22) },
   });
 }
 
@@ -92,6 +95,9 @@ async function showTextPane(ctx: ExtensionCommandContext, title: string, lines: 
         tui.requestRender();
       },
     };
+  }, {
+    overlay: true,
+    overlayOptions: { anchor: "center", width: "90%", maxHeight: Math.min(visible.length + 5, 28) },
   });
 }
 
@@ -248,6 +254,13 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
         tui.requestRender();
       },
     };
+  }, {
+    overlay: true,
+    overlayOptions: {
+      anchor: "center",
+      width: "90%",
+      maxHeight: Math.min(report.providers.reduce((n, p) => n + Math.max(1, p.meters.length), 0) + 6, 24),
+    },
   });
 }
 

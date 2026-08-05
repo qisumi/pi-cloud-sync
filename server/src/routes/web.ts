@@ -116,17 +116,8 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
     const rows = dbs.db
       .prepare(
         `SELECT h.uuid, h.cwd, h.name, h.version, h.deleted, h.content_pruned, h.updated_by, h.updated_at,
-                COALESCE(entries.entry_count, 0) AS entry_count,
-                COALESCE(usage.total_tokens, 0) AS retained_tokens,
-                COALESCE(usage.cost, 0) AS retained_cost
+                h.entry_count, h.total_tokens AS retained_tokens, h.total_cost AS retained_cost
          FROM session_headers h
-         LEFT JOIN (
-           SELECT session_uuid, COUNT(*) AS entry_count FROM session_entries GROUP BY session_uuid
-         ) entries ON entries.session_uuid = h.uuid
-         LEFT JOIN (
-           SELECT session_uuid, SUM(total_tokens) AS total_tokens, SUM(cost) AS cost
-           FROM session_usage GROUP BY session_uuid
-         ) usage ON usage.session_uuid = h.uuid
          ${where}
          ORDER BY ${order}
          LIMIT ? OFFSET ?`,
@@ -184,7 +175,12 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
             deleted: number;
             content_pruned: number;
             updated_by: string;
+            updated_by_device_id: string;
             updated_at: number;
+            entry_count: number;
+            readable_count: number;
+            total_tokens: number;
+            total_cost: number;
           }
         | undefined;
       if (!header) return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "session not found" });
@@ -194,9 +190,9 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
       const rows = dbs.db
         .prepare(
           `SELECT line, source_device, received_at FROM session_entries
-           WHERE session_uuid = ? ORDER BY received_at, rowid`,
+           WHERE session_uuid = ? AND readable = 1 ORDER BY sort_seq LIMIT ? OFFSET ?`,
         )
-        .all(uuid) as Array<{ line: string; source_device: string; received_at: number }>;
+        .all(uuid, limit, offset) as Array<{ line: string; source_device: string; received_at: number }>;
       const readable: EntryView[] = [];
       for (const row of rows) {
         const entry = parseReadableEntry(row.line);
@@ -227,10 +223,10 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
           contentPruned: header.content_pruned === 1,
           updatedBy: header.updated_by,
           updatedAt: header.updated_at,
-          total: readable.length,
-          rawTotal: rows.length,
+          total: header.readable_count,
+          rawTotal: header.entry_count,
           offset,
-          entries: readable.slice(offset, offset + limit),
+          entries: readable,
           usageSummary: {
             requests: usage.requests,
             totalTokens: usage.total_tokens,

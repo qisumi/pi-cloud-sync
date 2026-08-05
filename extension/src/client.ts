@@ -8,6 +8,10 @@ import type {
   PushChange,
   PushResponse,
   SessionChange,
+  SessionPullRequestV2,
+  SessionPullResponseV2,
+  SessionPushResponseV2,
+  UsageEventChange,
 } from "./types.js";
 import type { SyncConfig } from "./config.js";
 
@@ -86,17 +90,17 @@ export class SyncClient {
     return this.request<PullResponse>("POST", "/api/v1/sync/pull", body, opts);
   }
 
-  async pushSessions(sessions: SessionChange[]): Promise<PushResponse["sessions"]> {
-    if (sessions.length === 0) return [];
-    return this.request<{ sessions: PushResponse["sessions"] }>("POST", "/api/v1/sessions/push", {
-      sessions,
-    }).then((r) => r.sessions);
+  async pushSessionsV2(sessions: SessionChange[], usageEvents: UsageEventChange[] = []): Promise<SessionPushResponseV2> {
+    if (sessions.length === 0 && usageEvents.length === 0) {
+      return { sessions: [], conflicts: [], acceptedUsageEvents: 0 };
+    }
+    return this.request<SessionPushResponseV2>("POST", "/api/v2/sessions/push", { sessions, usageEvents }, {
+      timeoutMs: 120_000,
+    });
   }
 
-  async pullSessions(since?: number | null): Promise<{ sessions: PullResponse["sessions"] }> {
-    return this.request<{ sessions: PullResponse["sessions"] }>("POST", "/api/v1/sessions/pull", {
-      since: since ?? null,
-    });
+  async pullSessionsV2(body: SessionPullRequestV2): Promise<SessionPullResponseV2> {
+    return this.request<SessionPullResponseV2>("POST", "/api/v2/sessions/pull", body, { timeoutMs: 120_000 });
   }
 
   async restoreSession(uuid: string): Promise<boolean> {
@@ -116,7 +120,11 @@ export class SyncClient {
     return this.request<DeviceInfo[]>("GET", "/api/v1/devices");
   }
 
-  async health(): Promise<{ status: string; version: string }> {
-    return this.request<{ status: string; version: string }>("GET", "/api/v1/health");
+  async renameDevice(deviceId: string, name: string): Promise<DeviceInfo> {
+    return this.request<DeviceInfo>("PATCH", `/api/v1/devices/${encodeURIComponent(deviceId)}`, { name });
+  }
+
+  async health(): Promise<{ status: string; version: string; protocol: number }> {
+    return this.request<{ status: string; version: string; protocol: number }>("GET", "/api/v1/health");
   }
 }

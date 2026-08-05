@@ -484,6 +484,8 @@
   .device-fact strong { display: block; margin-top: 3px; overflow: hidden; color: var(--text-soft); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
   .device-id-row { margin-top: 12px; padding-top: 11px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); }
   .device-id { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font: 9px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; text-overflow: ellipsis; }
+  .device-select { width: 17px; height: 17px; flex: 0 0 auto; accent-color: var(--brand-strong); }
+  .device-actions { margin-top: 11px; display: flex; justify-content: flex-end; gap: 7px; }
 
   /* conflicts */
   .conflict-list { display: flex; flex-direction: column; gap: 11px; }
@@ -796,11 +798,14 @@
 
       <section id="page-devices" class="page hidden">
         <div class="page-head">
-          <div><h2>关联设备</h2><p>查看客户端版本、平台与最近心跳状态。</p></div>
+          <div><h2>设备管理</h2><p>按稳定设备 ID 管理名称，并将旧设备的历史永久合并到目标设备。</p></div>
           <div class="page-actions"><span id="deviceSummary" class="result-note"></span></div>
         </div>
         <div class="toolbar">
           <div class="search"><span class="search-glyph">⌕</span><input id="deviceSearch" class="input" placeholder="搜索设备名、平台或 ID…" autocomplete="off"></div>
+          <select id="deviceStatusFilter" aria-label="筛选设备状态"><option value="current">当前设备</option><option value="active">仅 active</option><option value="legacy">仅历史来源</option><option value="merged">已合并</option><option value="all">全部状态</option></select>
+          <select id="deviceMergeTarget" aria-label="合并目标设备"><option value="">选择合并目标…</option></select>
+          <button id="mergeDevices" class="btn small danger" type="button" disabled>合并所选</button>
         </div>
         <div id="deviceGrid" class="device-grid"></div>
       </section>
@@ -898,6 +903,8 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionData: { items: [], page: 1, pageSize: 40, total: 0, totalPages: 1 },
     activeSessionTotal: 0,
     devices: [],
+    deviceStatus: 'current',
+    selectedDevices: new Set(),
     conflicts: [],
     health: null,
     refreshing: false,
@@ -908,12 +915,15 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStatus: 'active',
     selectedSessions: new Set(),
     sessionRequestSeq: 0,
+    statsRequestSeq: 0,
+    loadedViews: { overview: false, sessions: false, devices: false, conflicts: false },
     detail: null,
     detailOffset: 0,
     activeConflict: null,
     conflictFilter: 'open',
     lastUpdated: null
   };
+  var requestControllers = Object.create(null);
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
@@ -1016,9 +1026,19 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   async function api(path, options) {
-    var opts = options || {};
+    var opts = Object.assign({}, options || {});
+    var requestKey = opts.requestKey;
+    delete opts.requestKey;
     var controller = new AbortController();
-    var timer = window.setTimeout(function () { controller.abort(); }, 16000);
+    var timedOut = false;
+    if (requestKey) {
+      if (requestControllers[requestKey]) requestControllers[requestKey].abort();
+      requestControllers[requestKey] = controller;
+    }
+    var timer = window.setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, 16000);
     var headers = Object.assign({}, opts.headers || {}, { Authorization: 'Bearer ' + token });
     if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
     try {
@@ -1031,10 +1051,15 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       return body.data;
     } catch (error) {
-      if (error && error.name === 'AbortError') throw new Error('请求超时，请检查服务器连接');
+      if (error && error.name === 'AbortError') {
+        var aborted = new Error(timedOut ? '请求超时，请检查服务器连接' : '请求已由更新操作替代');
+        aborted.cancelled = !timedOut;
+        throw aborted;
+      }
       throw error;
     } finally {
       window.clearTimeout(timer);
+      if (requestKey && requestControllers[requestKey] === controller) delete requestControllers[requestKey];
     }
   }
 
@@ -1121,12 +1146,14 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function logout() {
+    Object.keys(requestControllers).forEach(function (key) { requestControllers[key].abort(); });
     clearStoredToken();
     token = '';
     S.stats = null;
     S.sessions = [];
     S.devices = [];
     S.conflicts = [];
+    S.loadedViews = { overview: false, sessions: false, devices: false, conflicts: false };
     showAuth('');
   }
 
@@ -1158,6 +1185,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (updateHash !== false && location.hash !== '#' + name) history.pushState(null, '', '#' + name);
     closeMobileNav();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (token && !S.loadedViews[name] && !S.refreshing && !$('appShell').classList.contains('hidden')) {
+      refreshAll(true);
+    }
   }
 
   function routeFromHash() {
@@ -1171,7 +1201,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function statsPath() {
     var params = new URLSearchParams();
     params.set('days', String(S.days));
-    if (S.device) params.set('device', S.device);
+    if (S.device) params.set('deviceId', S.device);
     if (S.model) params.set('model', S.model);
     return '/api/v1/web/stats?' + params.toString();
   }
@@ -1192,30 +1222,40 @@ document.addEventListener('DOMContentLoaded', function () {
     S.refreshing = true;
     clearError();
     setButtonLoading($('refreshButton'), true);
-    var results = await Promise.allSettled([
-      api(statsPath()),
-      api('/api/v1/web/sessions?page=1&limit=7&status=active&sort=updated-desc'),
-      api(sessionsPath()),
-      api('/api/v1/devices'),
-      api('/api/v1/conflicts'),
-      publicHealth()
-    ]);
-    var errors = [];
-    if (results[0].status === 'fulfilled') S.stats = results[0].value; else errors.push('用量：' + results[0].reason.message);
-    if (results[1].status === 'fulfilled') {
-      S.sessions = results[1].value.items;
-      S.activeSessionTotal = results[1].value.total;
-    } else errors.push('最近会话：' + results[1].reason.message);
-    if (results[2].status === 'fulfilled') S.sessionData = results[2].value; else errors.push('会话列表：' + results[2].reason.message);
-    if (results[3].status === 'fulfilled') S.devices = results[3].value; else errors.push('设备：' + results[3].reason.message);
-    if (results[4].status === 'fulfilled') S.conflicts = results[4].value; else errors.push('冲突：' + results[4].reason.message);
-    if (results[5].status === 'fulfilled') {
-      S.health = results[5].value;
-      setHealth(S.health, true);
-    } else {
-      setHealth(null, false);
-      errors.push('状态：' + results[5].reason.message);
+    var view = S.view;
+    var jobs = [{ key: 'health', promise: publicHealth() }];
+    if (view === 'overview') {
+      jobs.push({ key: 'stats', promise: api(statsPath(), { requestKey: 'stats' }) });
+      jobs.push({ key: 'recentSessions', promise: api('/api/v1/web/sessions?page=1&limit=7&status=active&sort=updated-desc', { requestKey: 'recentSessions' }) });
+    } else if (view === 'sessions') {
+      jobs.push({ key: 'sessionData', promise: api(sessionsPath(), { requestKey: 'sessions' }) });
+    } else if (view === 'devices') {
+      jobs.push({ key: 'devices', promise: api('/api/v1/devices', { requestKey: 'devices' }) });
+    } else if (view === 'conflicts') {
+      jobs.push({ key: 'conflicts', promise: api('/api/v1/conflicts', { requestKey: 'conflicts' }) });
     }
+    var results = await Promise.allSettled(jobs.map(function (job) { return job.promise; }));
+    var errors = [];
+    results.forEach(function (result, index) {
+      var key = jobs[index].key;
+      if (result.status === 'rejected') {
+        if (!result.reason || !result.reason.cancelled) errors.push(key + '：' + result.reason.message);
+        return;
+      }
+      if (key === 'stats') S.stats = result.value;
+      else if (key === 'recentSessions') {
+        S.sessions = result.value.items;
+        S.activeSessionTotal = result.value.total;
+      } else if (key === 'sessionData') S.sessionData = result.value;
+      else if (key === 'devices') S.devices = result.value;
+      else if (key === 'conflicts') S.conflicts = result.value;
+      else if (key === 'health') {
+        S.health = result.value;
+        setHealth(S.health, true);
+      }
+    });
+    var healthResult = results[jobs.findIndex(function (job) { return job.key === 'health'; })];
+    if (healthResult && healthResult.status === 'rejected') setHealth(null, false);
     var unauthorized = results.some(function (result) { return result.status === 'rejected' && result.reason && result.reason.status === 401; });
     if (unauthorized) {
       S.refreshing = false;
@@ -1226,44 +1266,50 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     S.lastUpdated = Date.now();
+    S.loadedViews[view] = errors.length === 0;
     renderAll();
     if (errors.length) showError(errors.join('；'));
     else if (!quiet) showToast('数据已刷新', 'success');
     S.refreshing = false;
     setButtonLoading($('refreshButton'), false);
+    if (S.view !== view && !S.loadedViews[S.view]) refreshAll(true);
   }
 
   async function refreshStats() {
-    if (S.refreshing) return;
-    S.refreshing = true;
+    var seq = ++S.statsRequestSeq;
     setButtonLoading($('refreshButton'), true);
     try {
-      S.stats = await api(statsPath());
+      var stats = await api(statsPath(), { requestKey: 'stats' });
+      if (seq !== S.statsRequestSeq) return;
+      S.stats = stats;
+      S.loadedViews.overview = true;
       S.lastUpdated = Date.now();
       renderStats();
       clearError();
     } catch (error) {
+      if (error.cancelled) return;
       if (error.status === 401) {
         clearStoredToken();
         token = '';
         showAuth('登录已过期，请重新输入令牌。');
       } else showError('用量加载失败：' + error.message);
     } finally {
-      S.refreshing = false;
-      setButtonLoading($('refreshButton'), false);
+      if (seq === S.statsRequestSeq) setButtonLoading($('refreshButton'), false);
     }
   }
 
   async function loadSessionsPage(quiet) {
     var seq = ++S.sessionRequestSeq;
     try {
-      var data = await api(sessionsPath());
+      var data = await api(sessionsPath(), { requestKey: 'sessions' });
       if (seq !== S.sessionRequestSeq) return;
       S.sessionData = data;
+      S.loadedViews.sessions = true;
+      if (S.sessionStatus === 'active') S.activeSessionTotal = data.total;
       S.sessionPage = data.page;
       renderSessions();
     } catch (error) {
-      if (!quiet) showToast('会话列表加载失败：' + error.message, 'error');
+      if (!quiet && !error.cancelled) showToast('会话列表加载失败：' + error.message, 'error');
     }
   }
 
@@ -1277,24 +1323,24 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function renderBadges() {
-    $('sessionsBadge').textContent = fmtNum(S.activeSessionTotal);
-    $('devicesBadge').textContent = fmtNum(S.devices.length);
+    $('sessionsBadge').textContent = S.loadedViews.overview || S.loadedViews.sessions ? fmtNum(S.activeSessionTotal) : '–';
+    $('devicesBadge').textContent = S.loadedViews.devices ? fmtNum(S.devices.filter(function (item) { return item.status !== 'merged'; }).length) : '–';
     var open = S.conflicts.filter(function (item) { return !item.resolvedAt; }).length;
-    $('conflictsBadge').textContent = fmtNum(open);
+    $('conflictsBadge').textContent = S.loadedViews.conflicts ? fmtNum(open) : '–';
     $('conflictsBadge').classList.toggle('alert', open > 0);
   }
 
   function fillFilterOptions() {
     if (!S.stats) return;
     var deviceOptions = '<option value="">全部设备</option>' + S.stats.devices.map(function (value) {
-      return '<option value="' + esc(value) + '">' + esc(value) + '</option>';
+      return '<option value="' + esc(value.deviceId) + '">' + esc(value.name) + '</option>';
     }).join('');
     var modelOptions = '<option value="">全部模型</option>' + S.stats.models.map(function (value) {
       return '<option value="' + esc(value) + '">' + esc(value) + '</option>';
     }).join('');
     $('deviceSelect').innerHTML = deviceOptions;
     $('modelSelect').innerHTML = modelOptions;
-    $('deviceSelect').value = S.stats.devices.indexOf(S.device) >= 0 ? S.device : '';
+    $('deviceSelect').value = S.stats.devices.some(function (value) { return value.deviceId === S.device; }) ? S.device : '';
     $('modelSelect').value = S.stats.models.indexOf(S.model) >= 0 ? S.model : '';
   }
 
@@ -1319,7 +1365,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var rangeMap = { '1': '近 1 天', '7': '近 7 天', '30': '近 30 天', all: '全部时间' };
     $('overviewRangeText').textContent = rangeMap[String(S.days)] || '';
     var active = [];
-    if (S.device) active.push('设备：' + S.device);
+    if (S.device) {
+      var selectedDevice = S.stats.devices.find(function (value) { return value.deviceId === S.device; });
+      active.push('设备：' + (selectedDevice ? selectedDevice.name : S.device));
+    }
     if (S.model) active.push('模型：' + S.model);
     $('filterSummary').textContent = active.length ? '当前筛选 · ' + active.join(' · ') : '全部客户端聚合';
     $('clearFilters').classList.toggle('hidden', active.length === 0);
@@ -1444,9 +1493,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var top = rows.slice(0, 7);
     var max = Math.max.apply(Math, top.map(function (row) { return row.total || 0; }).concat([1]));
     host.innerHTML = top.map(function (row) {
-      var value = row[key] || '(unknown)';
-      return '<button class="bar-row" type="button" data-bar-kind="' + esc(key) + '" data-bar-value="' + esc(value) + '" title="筛选 ' + esc(value) + '">' +
-        '<span class="bar-label">' + esc(value) + '</span><span class="bar-track"><span class="bar-fill ' + (violet ? 'violet' : '') + '" style="width:' + Math.max(1, (row.total || 0) / max * 100).toFixed(1) + '%"></span></span>' +
+      var label = row[key] || '(unknown)';
+      var filterValue = key === 'device' ? row.deviceId : label;
+      return '<button class="bar-row" type="button" data-bar-kind="' + esc(key) + '" data-bar-value="' + esc(filterValue) + '" title="筛选 ' + esc(label) + '">' +
+        '<span class="bar-label">' + esc(label) + '</span><span class="bar-track"><span class="bar-fill ' + (violet ? 'violet' : '') + '" style="width:' + Math.max(1, (row.total || 0) / max * 100).toFixed(1) + '%"></span></span>' +
         '<span class="bar-value">' + esc(fmtNum(row.total)) + '</span></button>';
     }).join('');
   }
@@ -1570,10 +1620,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   async function loadDetail(uuid) {
     try {
-      S.detail = await api('/api/v1/web/sessions/' + encodeURIComponent(uuid) + '?limit=' + DETAIL_PAGE_SIZE + '&offset=' + S.detailOffset);
+      S.detail = await api('/api/v1/web/sessions/' + encodeURIComponent(uuid) + '?limit=' + DETAIL_PAGE_SIZE + '&offset=' + S.detailOffset, { requestKey: 'sessionDetail' });
       renderDetail();
     } catch (error) {
-      $('messageList').innerHTML = '<div class="notice">会话加载失败：' + esc(error.message) + '</div>';
+      if (!error.cancelled) $('messageList').innerHTML = '<div class="notice">会话加载失败：' + esc(error.message) + '</div>';
     }
   }
 
@@ -1719,28 +1769,83 @@ document.addEventListener('DOMContentLoaded', function () {
   function renderDevices() {
     var query = $('deviceSearch').value.trim().toLowerCase();
     var rows = S.devices.filter(function (device) {
+      if (S.deviceStatus === 'current' && device.status === 'merged') return false;
+      if (S.deviceStatus !== 'current' && S.deviceStatus !== 'all' && device.status !== S.deviceStatus) return false;
       if (!query) return true;
       return [device.name, device.platform, device.deviceId, device.piVersion, device.extensionVersion].some(function (value) {
         return String(value || '').toLowerCase().indexOf(query) >= 0;
       });
     });
-    var onlineCount = S.devices.filter(function (device) { return Date.now() - device.lastSeen < 5 * 60 * 1000; }).length;
-    $('deviceSummary').textContent = onlineCount + ' 台最近在线 · 共 ' + S.devices.length + ' 台';
+    var ids = new Set(S.devices.map(function (device) { return device.deviceId; }));
+    Array.from(S.selectedDevices).forEach(function (id) { if (!ids.has(id)) S.selectedDevices.delete(id); });
+    var onlineCount = S.devices.filter(function (device) { return device.status === 'active' && Date.now() - device.lastSeen < 5 * 60 * 1000; }).length;
+    $('deviceSummary').textContent = onlineCount + ' 台最近在线 · 共 ' + S.devices.length + ' 台 · 已选 ' + S.selectedDevices.size + ' 台';
+    var targetValue = $('deviceMergeTarget').value;
+    $('deviceMergeTarget').innerHTML = '<option value="">选择合并目标…</option>' + S.devices
+      .filter(function (device) { return device.status !== 'merged' && !S.selectedDevices.has(device.deviceId); })
+      .map(function (device) { return '<option value="' + esc(device.deviceId) + '">' + esc(device.name) + ' [' + esc(device.status) + ']</option>'; })
+      .join('');
+    if (Array.from($('deviceMergeTarget').options).some(function (option) { return option.value === targetValue; })) $('deviceMergeTarget').value = targetValue;
+    $('mergeDevices').disabled = S.selectedDevices.size === 0 || !$('deviceMergeTarget').value;
     if (!rows.length) {
       $('deviceGrid').innerHTML = '<div class="card empty"><span><span class="empty-glyph">⌘</span>没有符合条件的设备</span></div>';
       return;
     }
     $('deviceGrid').innerHTML = rows.map(function (device) {
       var online = Date.now() - device.lastSeen < 5 * 60 * 1000;
-      return '<article class="card device-card"><div class="device-top"><div class="device-avatar">' + platformGlyph(device.platform) + '</div>' +
+      var selectable = device.status !== 'merged';
+      return '<article class="card device-card"><div class="device-top"><input class="device-select" type="checkbox" data-select-device="' + esc(device.deviceId) + '"' + (S.selectedDevices.has(device.deviceId) ? ' checked' : '') + (selectable ? '' : ' disabled') + ' aria-label="选择设备">' +
+        '<div class="device-avatar">' + platformGlyph(device.platform) + '</div>' +
         '<div class="device-main"><div class="device-name">' + esc(device.name || '未命名设备') + '</div><div class="device-platform">' + esc(device.platform || '未知平台') + '</div></div>' +
-        '<div class="device-status ' + (online ? 'online' : '') + '"><span class="status-dot ' + (online ? 'online' : '') + '"></span>' + (online ? '最近在线' : '离线') + '</div></div>' +
-        '<div class="device-facts"><div class="device-fact"><span>Pi 版本</span><strong>' + esc(device.piVersion || '-') + '</strong></div>' +
-        '<div class="device-fact"><span>插件版本</span><strong>' + esc(device.extensionVersion || '-') + '</strong></div>' +
-        '<div class="device-fact"><span>最近心跳</span><strong title="' + esc(fmtTime(device.lastSeen)) + '">' + esc(fmtRelative(device.lastSeen)) + '</strong></div>' +
-        '<div class="device-fact"><span>首次关联</span><strong>' + esc(fmtTime(device.createdAt)) + '</strong></div></div>' +
-        '<div class="device-id-row"><span class="device-id" title="' + esc(device.deviceId) + '">' + esc(device.deviceId) + '</span><button class="btn small" type="button" data-copy-text="' + esc(device.deviceId) + '">复制 ID</button></div></article>';
+        '<div class="device-status ' + (online && device.status === 'active' ? 'online' : '') + '"><span class="status-dot ' + (online && device.status === 'active' ? 'online' : '') + '"></span>' + esc(device.status) + '</div></div>' +
+        '<div class="device-facts"><div class="device-fact"><span>会话 / 条目</span><strong>' + fmtFull(device.sessionCount) + ' / ' + fmtFull(device.entryCount) + '</strong></div>' +
+        '<div class="device-fact"><span>Tokens / 费用</span><strong>' + fmtNum(device.totalTokens) + ' / ' + fmtCost(device.totalCost) + '</strong></div>' +
+        '<div class="device-fact"><span>版本</span><strong>pi ' + esc(device.piVersion || '-') + ' · 插件 ' + esc(device.extensionVersion || '-') + '</strong></div>' +
+        '<div class="device-fact"><span>最近心跳</span><strong title="' + esc(fmtTime(device.lastSeen)) + '">' + esc(fmtRelative(device.lastSeen)) + '</strong></div></div>' +
+        (device.mergedInto ? '<div class="result-note" style="margin-top:10px">历史已永久合并到 ' + esc(device.mergedInto) + '</div>' : '') +
+        '<div class="device-id-row"><span class="device-id" title="' + esc(device.deviceId) + '">' + esc(device.deviceId) + '</span><button class="btn small" type="button" data-copy-text="' + esc(device.deviceId) + '">复制 ID</button></div>' +
+        '<div class="device-actions">' + (selectable ? '<button class="btn small" type="button" data-rename-device="' + esc(device.deviceId) + '">重命名</button>' : '') + '</div></article>';
     }).join('');
+  }
+
+  async function renameDevice(id) {
+    var device = S.devices.find(function (item) { return item.deviceId === id; });
+    if (!device || device.status === 'merged') return;
+    var name = window.prompt('输入新的设备显示名：', device.name || '');
+    if (name == null || !name.trim() || name.trim() === device.name) return;
+    try {
+      await api('/api/v1/devices/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) });
+      S.devices = await api('/api/v1/devices');
+      renderDevices();
+      showToast('设备已重命名；后续统计仍按稳定设备 ID 归集', 'success');
+    } catch (error) { showToast('设备重命名失败：' + error.message, 'error'); }
+  }
+
+  async function mergeSelectedDevices() {
+    var sourceDeviceIds = Array.from(S.selectedDevices);
+    var targetDeviceId = $('deviceMergeTarget').value;
+    var target = S.devices.find(function (device) { return device.deviceId === targetDeviceId; });
+    if (!sourceDeviceIds.length || !target || sourceDeviceIds.indexOf(targetDeviceId) >= 0) return;
+    setButtonLoading($('mergeDevices'), true);
+    try {
+      var payload = { sourceDeviceIds: sourceDeviceIds, targetDeviceId: targetDeviceId };
+      var preview = await api('/api/v1/devices/merge/preview', { method: 'POST', body: JSON.stringify(payload) });
+      var affected = preview.affected;
+      var warning = '此操作不可撤销，将改写 ' + affected.sessions + ' 个会话、' + affected.entries + ' 个条目、' + affected.usageRows + ' 条用量、' + affected.objects + ' 个对象和 ' + affected.conflicts + ' 个冲突。';
+      if (preview.onlineWarning) warning += '\n\n警告：选中的来源设备仍在线；它下次心跳时会恢复为独立设备，但历史不会回迁。';
+      var typed = window.prompt(warning + '\n\n请输入目标设备名“' + target.name + '”确认永久合并：', '');
+      if (typed !== target.name) { showToast('设备名不匹配，已取消合并', 'error'); return; }
+      await api('/api/v1/devices/merge', {
+        method: 'POST',
+        body: JSON.stringify({ sourceDeviceIds: sourceDeviceIds, targetDeviceId: targetDeviceId, confirmTargetName: typed })
+      });
+      S.selectedDevices.clear();
+      S.devices = await api('/api/v1/devices');
+      S.stats = await api(statsPath());
+      renderAll();
+      showToast('设备历史已永久合并', 'success');
+    } catch (error) { showToast('设备合并失败：' + error.message, 'error'); }
+    finally { setButtonLoading($('mergeDevices'), false); }
   }
 
   function filteredConflicts() {
@@ -1997,6 +2102,20 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // device and conflict events
   $('deviceSearch').oninput = renderDevices;
+  $('deviceStatusFilter').onchange = function (event) { S.deviceStatus = event.target.value; renderDevices(); };
+  $('deviceMergeTarget').onchange = function () { $('mergeDevices').disabled = S.selectedDevices.size === 0 || !$('deviceMergeTarget').value; };
+  $('mergeDevices').onclick = mergeSelectedDevices;
+  $('deviceGrid').onchange = function (event) {
+    var checkbox = event.target.closest('[data-select-device]');
+    if (!checkbox) return;
+    if (checkbox.checked) S.selectedDevices.add(checkbox.dataset.selectDevice);
+    else S.selectedDevices.delete(checkbox.dataset.selectDevice);
+    renderDevices();
+  };
+  $('deviceGrid').onclick = function (event) {
+    var rename = event.target.closest('[data-rename-device]');
+    if (rename) renameDevice(rename.dataset.renameDevice);
+  };
   document.querySelectorAll('#conflictSegment button').forEach(function (button) {
     button.onclick = function () {
       S.conflictFilter = button.dataset.conflictFilter;

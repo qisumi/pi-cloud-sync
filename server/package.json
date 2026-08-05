@@ -19,6 +19,7 @@
     "pm2:status": "pm2 status"
   },
   "dependencies": {
+    "@fastify/compress": "^7.0.3",
     "@pi-cloud-sync/shared": "*",
     "better-sqlite3": "^11.5.0",
     "fastify": "^4.28.1"

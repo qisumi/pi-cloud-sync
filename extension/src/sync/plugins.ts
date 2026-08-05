@@ -45,8 +45,8 @@ export function readLocalPackages(cfg: SyncConfig): PackageEntry[] {
 }
 
 /** 本地自定义扩展文件（agentDir/extensions/*.ts 及其子目录 index.ts） */
-export function listCustomExtensionFiles(): Array<{ path: string; rel: string; content: string }> {
-  const out: Array<{ path: string; rel: string; content: string }> = [];
+export function listCustomExtensionFiles(): Array<{ path: string; rel: string; size: number; mtimeMs: number }> {
+  const out: Array<{ path: string; rel: string; size: number; mtimeMs: number }> = [];
   if (!existsSync(EXTENSIONS_DIR)) return out;
 
   const walk = (dir: string, relDir: string) => {
@@ -55,7 +55,8 @@ export function listCustomExtensionFiles(): Array<{ path: string; rel: string; c
       if (entry.isDirectory()) {
         walk(p, join(relDir, entry.name));
       } else if (entry.isFile() && entry.name.endsWith(".ts")) {
-        out.push({ path: p, rel: join(relDir, entry.name), content: readFileSync(p, "utf8") });
+        const info = statSync(p);
+        out.push({ path: p, rel: join(relDir, entry.name), size: info.size, mtimeMs: info.mtimeMs });
       }
     }
   };
@@ -95,7 +96,11 @@ export function buildExtensionFileChanges(state: SyncState): PushChange[] {
     const key = `plugin/extension/${f.rel.replace(/\\/g, "/")}`;
     ensureObjectState(state, key);
     const st = state.objects[key];
-    const sha = sha256(f.content);
+    if (st.localSha256 && st.localSize === f.size && st.localMtimeMs === f.mtimeMs) continue;
+    const content = readFileSync(f.path, "utf8");
+    const sha = sha256(content);
+    st.localSize = f.size;
+    st.localMtimeMs = f.mtimeMs;
     if (st.localSha256 === sha) continue;
     st.localSha256 = sha;
     changes.push({
@@ -103,8 +108,8 @@ export function buildExtensionFileChanges(state: SyncState): PushChange[] {
       key,
       baseSha256: st.baseSha256,
       sha256: sha,
-      contentB64: Buffer.from(f.content, "utf8").toString("base64"),
-      mtime: Math.trunc(statSync(f.path).mtimeMs),
+      contentB64: Buffer.from(content, "utf8").toString("base64"),
+      mtime: Math.trunc(f.mtimeMs),
     });
   }
   return changes;
@@ -131,6 +136,9 @@ export function applyExtensionFiles(state: SyncState, objects: MergedObject[]): 
       serverVersion: obj.version,
       fields: {},
     };
+    const info = statSync(target);
+    state.objects[obj.key].localSize = info.size;
+    state.objects[obj.key].localMtimeMs = info.mtimeMs;
   }
   return wrote;
 }

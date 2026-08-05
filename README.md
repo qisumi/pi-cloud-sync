@@ -28,7 +28,7 @@
 ┌─────────────┐   HTTPS + Bearer Token   ┌──────────────────┐
 │  Device A   │ ───────────────────────► │   Sync Server    │
 │  pi + ext   │ ◄─────────────────────── │  Node + SQLite   │
-└─────────────┘    /api/v1/sync/*        └──────────────────┘
+└─────────────┘    objects v1 + sessions v2 └──────────────────┘
 ┌─────────────┐              ▲
 │  Device B   │ ─────────────┘
 │  pi + ext   │
@@ -108,7 +108,7 @@ pi -e ./extension/src/index.ts
     "onStartup": "pull",                           // 启动时拉取 / pull on start
     "onShutdown": "push",                          // 退出时推送 / push on exit
     "scopes": { "config": true, "sessions": true, "plugins": true },
-    "includeConfigs": ["settings.json", "keybindings.json", "models.json"],
+    "includeConfigs": ["settings.json", "keybindings.json", "models.json", "auth.json"],
     "autoInstallPackages": true,                   // 自动安装缺失包 / auto-install packages
     "pruneTombstonesAfterDays": 30
   },
@@ -129,6 +129,7 @@ pi -e ./extension/src/index.ts
 /qisumi-sync-conflicts  # 查看冲突 view conflicts
 /qisumi-sync-conflicts-resolve 3 keep-b   # 解决冲突 resolve conflict
 /qisumi-sync-devices    # 设备列表 list devices
+/qisumi-sync-device-rename <新设备名>  # 重命名当前设备并立即心跳
 /qisumi-sync-find <query> # 跨项目搜索会话 search sessions across projects
 /qisumi-sync-list       # 列出本地会话
 /qisumi-sync-restore <uuid>  # 恢复已删除会话 restore deleted session
@@ -145,7 +146,7 @@ pi -e ./extension/src/index.ts
 - 服务端分页的同步会话列表（20 / 40 / 80 条每页，支持状态、搜索与排序）
 - 干净的会话阅读流：仅显示用户与助手正文，过滤 toolCall / toolResult，并安全渲染 Markdown
 - 用量趋势与模型/设备分布筛选（Chart.js CDN 不可用时自动降级）
-- 关联设备在线状态、版本与最近心跳
+- 设备状态、版本、最近心跳与用量汇总；支持重命名、合并预览和输入目标名称确认后的永久历史合并
 - 冲突内容对比，以及 keep-a / keep-b / 手动内容解决
 - 会话与消息搜索、角色筛选、排序、分页和内容复制
 - 按筛选结果批量选择并删除会话正文；Token、费用、模型、日期与来源设备统计继续保留
@@ -166,8 +167,9 @@ pi -e ./extension/src/index.ts
 
 **会话**：按 entry id 合并去重，每条记录来源设备。普通 tombstone 可 `restore`；网页端“删除正文”会永久裁剪消息、名称与路径，不能伪恢复，但会把用量转存为独立轻量摘要。
 
-**负担优化**：会话同步默认**剥离工具输出、工具调用块与思考过程**（本地文件保持完整，仅同步副本精简，
-配置项 `sync.stripToolOutputs` / `sync.stripThinking` 可关）；拉取为增量 + 按需（`includeSessions`）。
+**负担优化**：会话同步协议 v2 使用文件字节游标与服务端单调游标。未变化 JSONL 只做 `stat`，追加文件只读新增完整行，
+按 250 条 / 2 MiB 分块确认后才推进游标；截断或覆盖会自动全量对账。同步副本默认**剥离工具输出、工具调用块与思考过程**，
+本地原文件保持完整（配置项 `sync.stripToolOutputs` / `sync.stripThinking` 可关闭）。
 
 ---
 
@@ -256,31 +258,10 @@ deepseek-v4       475.0k  ¥30.71  1314
 + **会话扫描**（解析历史 `.jsonl` 补齐，自动去重）。费用直接采用 pi 计算的成本（USD），
 显示时优先用 **Exchangerate-API 实时汇率**换算为人民币 ¥，失败回退 `stats.usdCnyRate`（默认 6.76），可用 `--usd` 查看美元原值。
 
-### 💱 参考价格（¥/百万 tokens）
-
-以下参考价仅保留在文档中供估算，`/qisumi-quota` 面板不再展示，以保持额度信息紧凑：
-
-```
-参考价(¥/百万tokens): DeepSeek V4-Pro 入3/出6/缓存0.025 · Z.AI 智谱 GLM-4.7 入2/出8/缓存0.4
-```
-
-| 渠道 | 模型 | 输入 ¥/M | 输出 ¥/M | 缓存命中 ¥/M | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| **DeepSeek**（官方开放平台，2026-05 永久降价） | V4-Pro | 3 | 6 | 0.025 | 高峰时段(9-12/14-18) ×2 |
-| | V4-Flash | 1 | 2 | 0.02 | |
-| **Z.AI 智谱**（[bigmodel.cn/pricing](https://bigmodel.cn/pricing)，2026-08） | GLM-4.7 | 2 | 8 | 0.4 | ≤32k；32-200k: 入4/出16/缓存0.8 |
-| | GLM-5 | 4 | 18 | 1 | ≤32k |
-| | GLM-5-Turbo | 5 | 22 | 1.2 | ≤32k |
-| | GLM-5.1 | 6 | 24 | 1.3 | ≤32k；32k+: 入8/出28 |
-| | GLM-5.2 | 8 | 28 | 2 | 1M 上下文新品 |
-| | GLM-4.5-Air | 0.8 | 2 | 0.16 | |
-| | GLM-4.7-FlashX | 0.5 | 3 | 0.1 | |
-| | GLM-4.7-Flash | 免费 | 免费 | 免费 | |
-
 ## 💬 Session Auto-Naming / 会话自动命名
 
-新会话收到第一条用户消息时自动命名（取消息摘要，去代码/markdown、截断到 `session.autoNameMax` 字），
-已手动命名的会话不会被覆盖。同时新会话默认切换到**订阅内成本相对低的模型**：
+新会话收到第一条用户消息后，后台调用同渠道的低价模型生成短标题；请求独立、无工具、无缓存且限时，
+不会阻塞回复，也绝不会切换主会话模型。不可用时使用本地摘要兜底，已手动命名的会话不会被覆盖：
 
 ```bash
 /qisumi-session         # 查看当前会话信息 + 命名/低价模型配置
@@ -291,12 +272,11 @@ deepseek-v4       475.0k  ¥30.71  1314
 | --- | --- | --- |
 | `session.autoName` | `true` | 自动命名开关 |
 | `session.autoNameMax` | `32` | 自动命名最大长度（字） |
-| `session.defaultCheapModel` | `true` | 新会话默认使用低价模型 |
-| `session.cheapModelByProvider` | 见下 | provider → 低价模型 id 映射 |
+| `session.autoNameModelByProvider` | 见下 | provider → AI 命名专用低价模型 id 映射 |
 
 默认低价模型映射（按各订阅目录内成本相对低者）：
 
-| provider | 低价默认模型 | 对比（$ / 1M tokens，输入/输出） |
+| provider | AI 命名专用模型 | 说明 |
 | --- | --- | --- |
 | `deepseek` | `deepseek-v4-flash` | 0.14/0.28 vs v4-pro 0.435/0.87 |
 | `zai-coding-cn` | `glm-4.7` | 套餐内相对最低（glm-5.2 8/28、5-turbo 5/22） |
@@ -305,9 +285,9 @@ deepseek-v4       475.0k  ¥30.71  1314
 可随时覆盖，例如：
 
 ```bash
-/qisumi-sync-config-set session.cheapModelByProvider.deepseek deepseek-chat
+/qisumi-sync-config-set session.autoNameModelByProvider.deepseek deepseek-chat
 /qisumi-sync-config-set session.autoNameMax 48
-/qisumi-sync-config-set session.defaultCheapModel false
+/qisumi-sync-config-set session.autoName false
 ```
 
 ---
@@ -317,8 +297,8 @@ deepseek-v4       475.0k  ¥30.71  1314
 ```bash
 npm install
 npm run typecheck     # 类型检查（shared / server / extension）
-npm test              # 服务端测试（15 项）
-npm run test --workspace=extension  # 插件端与端到端测试（32 项）
+npm test              # 服务端测试（16 项）
+npm run test --workspace=extension  # 插件端与端到端测试（34 项）
 ```
 
 ## 🔒 Security / 安全

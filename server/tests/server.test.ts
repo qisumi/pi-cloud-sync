@@ -700,12 +700,19 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
       message: { role, provider: "test-provider", model, usage },
     }),
   });
-  const pushSessions = (deviceName: string, sessions: unknown[]) =>
-    fetch(`${ctx.base}/api/v1/sessions/push`, {
+  const pushSessions = async (deviceName: string, sessions: unknown[]) => {
+    const heartbeat = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
       method: "POST",
-      headers: headers(ctx, { "x-device-name": deviceName }),
+      headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+      body: JSON.stringify({ deviceId: deviceName === "dev-a" ? ctx.deviceId : "", name: deviceName, platform: "linux", piVersion: "0.83.0", extensionVersion: "0.1.0" }),
+    });
+    const deviceId = ((await heartbeat.json()) as { data: { deviceId: string } }).data.deviceId;
+    return fetch(`${ctx.base}/api/v1/sessions/push`, {
+      method: "POST",
+      headers: headers(ctx, { "x-device-id": deviceId, "x-device-name": deviceName }),
       body: JSON.stringify({ sessions }),
     });
+  };
 
   await pushSessions("dev-a", [{
     uuid: "stats-sess-a",
@@ -738,7 +745,7 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
       byDay: Array<{ date: string; total: number }>;
       byModel: Array<{ model: string; total: number; cost: number }>;
       byDevice: Array<{ device: string; total: number }>;
-      devices: string[];
+      devices: Array<{ deviceId: string; name: string }>;
       models: string[];
     };
   };
@@ -754,7 +761,7 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
   // 按总量降序：model-y(330) > model-x(245)
   assert.deepEqual(allJson.data.byModel.map((m) => m.model), ["model-y", "model-x"]);
   assert.deepEqual(allJson.data.byDevice.map((d) => d.device).sort(), ["dev-a", "dev-b"]);
-  assert.ok(allJson.data.devices.includes("dev-a"));
+  assert.ok(allJson.data.devices.some((device) => device.name === "dev-a"));
   assert.ok(allJson.data.models.includes("model-y"));
 
   // 按设备过滤
@@ -920,4 +927,213 @@ test("web sessions: server pagination, readable messages and bulk content prunin
   });
   const restoreJson = (await restore.json()) as { data: { restored: boolean } };
   assert.equal(restoreJson.data.restored, false, "正文已裁剪的会话不可伪恢复");
+});
+
+test("sync v2 and devices: cursor deltas, independent usage, permanent merge and reactivation", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  const sourceHeartbeat = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
+    body: JSON.stringify({
+      deviceId: "",
+      name: "old-laptop",
+      platform: "win32",
+      piVersion: "0.83.0",
+      extensionVersion: "0.2.0",
+    }),
+  });
+  const sourceDeviceId = ((await sourceHeartbeat.json()) as { data: { deviceId: string } }).data.deviceId;
+  const sourceHeaders = headers(ctx, { "x-device-id": sourceDeviceId, "x-device-name": "old-laptop" });
+  const lineJson = JSON.stringify({
+    type: "message",
+    id: "v2-entry-1",
+    parentId: null,
+    timestamp: "2026-08-06T00:00:00.000Z",
+    message: {
+      role: "assistant",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      content: [{ type: "text", text: "v2 result" }],
+      usage: { input: 100, output: 20, totalTokens: 120, cost: { total: 0.01 } },
+    },
+  });
+
+  const push = await fetch(`${ctx.base}/api/v2/sessions/push`, {
+    method: "POST",
+    headers: sourceHeaders,
+    body: JSON.stringify({
+      sessions: [{
+        uuid: "v2-merge-session",
+        cwd: "/old/device/project",
+        name: "Incremental v2",
+        headerJson: JSON.stringify({ type: "session", id: "v2-merge-session", cwd: "/old/device/project" }),
+        createdAt: Date.now(),
+        baseVersion: 0,
+        entries: [{ id: "v2-entry-1", parentId: null, lineJson }],
+        mtime: Date.now(),
+      }],
+      usageEvents: [{
+        id: "auto-name-1",
+        sessionUuid: "v2-merge-session",
+        occurredAt: Date.now(),
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        input: 12,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 16,
+        cost: 0.001,
+      }],
+    }),
+  });
+  assert.equal(push.status, 200);
+  const pushJson = (await push.json()) as {
+    data: { sessions: Array<Record<string, unknown> & { acceptedEntries: number }>; acceptedUsageEvents: number };
+  };
+  assert.equal(pushJson.data.sessions[0].acceptedEntries, 1);
+  assert.equal(pushJson.data.acceptedUsageEvents, 1);
+  assert.equal("entryIds" in pushJson.data.sessions[0], false, "v2 响应不得随历史返回 entryIds");
+
+  const pull = await fetch(`${ctx.base}/api/v2/sessions/pull`, {
+    method: "POST",
+    headers: sourceHeaders,
+    body: JSON.stringify({ cursor: 0, limit: 10, maxBytes: 1024 * 1024 }),
+  });
+  const pullJson = (await pull.json()) as {
+    data: { changes: Array<{ seq: number; kind: string; uuid?: string }>; nextCursor: number; hasMore: boolean };
+  };
+  assert.ok(pullJson.data.changes.some((change) => change.kind === "header"));
+  assert.ok(pullJson.data.changes.some((change) => change.kind === "entry" && change.uuid === "v2-merge-session"));
+  assert.ok(pullJson.data.nextCursor > 0);
+  assert.equal(pullJson.data.hasMore, false);
+
+  const noChanges = await fetch(`${ctx.base}/api/v2/sessions/pull`, {
+    method: "POST",
+    headers: sourceHeaders,
+    body: JSON.stringify({ cursor: pullJson.data.nextCursor, limit: 10 }),
+  });
+  const noChangesJson = (await noChanges.json()) as { data: { changes: unknown[]; nextCursor: number; hasMore: boolean } };
+  assert.deepEqual(noChangesJson.data.changes, []);
+  assert.equal(noChangesJson.data.nextCursor, pullJson.data.nextCursor);
+  assert.equal(noChangesJson.data.hasMore, false);
+
+  const rename = await fetch(`${ctx.base}/api/v1/devices/${ctx.deviceId}`, {
+    method: "PATCH",
+    headers: headers(ctx),
+    body: JSON.stringify({ name: "new-desktop" }),
+  });
+  assert.equal(rename.status, 200);
+
+  const preview = await fetch(`${ctx.base}/api/v1/devices/merge/preview`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ sourceDeviceIds: [sourceDeviceId], targetDeviceId: ctx.deviceId }),
+  });
+  const previewJson = (await preview.json()) as {
+    data: { affected: { sessions: number; entries: number; usageRows: number }; onlineWarning: boolean };
+  };
+  assert.equal(previewJson.data.affected.sessions, 1);
+  assert.equal(previewJson.data.affected.entries, 1);
+  assert.equal(previewJson.data.affected.usageRows, 2, "正文用量和 AI 命名用量均参与迁移");
+  assert.equal(previewJson.data.onlineWarning, true);
+
+  const wrongConfirm = await fetch(`${ctx.base}/api/v1/devices/merge`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({
+      sourceDeviceIds: [sourceDeviceId],
+      targetDeviceId: ctx.deviceId,
+      confirmTargetName: "wrong-name",
+    }),
+  });
+  assert.equal(wrongConfirm.status, 400);
+
+  const merge = await fetch(`${ctx.base}/api/v1/devices/merge`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({
+      sourceDeviceIds: [sourceDeviceId],
+      targetDeviceId: ctx.deviceId,
+      confirmTargetName: "new-desktop",
+    }),
+  });
+  assert.equal(merge.status, 200);
+
+  const devices = await fetch(`${ctx.base}/api/v1/devices`, { headers: headers(ctx) });
+  const devicesJson = (await devices.json()) as {
+    data: Array<{
+      deviceId: string;
+      name: string;
+      status: string;
+      mergedInto: string | null;
+      entryCount: number;
+      totalTokens: number;
+    }>;
+  };
+  const sourceAfterMerge = devicesJson.data.find((device) => device.deviceId === sourceDeviceId)!;
+  const targetAfterMerge = devicesJson.data.find((device) => device.deviceId === ctx.deviceId)!;
+  assert.equal(sourceAfterMerge.status, "merged");
+  assert.equal(sourceAfterMerge.mergedInto, ctx.deviceId);
+  assert.equal(sourceAfterMerge.entryCount, 0);
+  assert.equal(sourceAfterMerge.totalTokens, 0);
+  assert.equal(targetAfterMerge.name, "new-desktop");
+  assert.equal(targetAfterMerge.entryCount, 1);
+  assert.equal(targetAfterMerge.totalTokens, 136);
+
+  const reactivate = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
+    body: JSON.stringify({
+      deviceId: sourceDeviceId,
+      name: "old-laptop-online-again",
+      platform: "win32",
+      piVersion: "0.84.0",
+      extensionVersion: "0.2.1",
+    }),
+  });
+  const reactivateJson = (await reactivate.json()) as { data: { deviceId: string; name: string; reactivated: boolean } };
+  assert.equal(reactivateJson.data.deviceId, sourceDeviceId);
+  assert.equal(reactivateJson.data.name, "old-laptop-online-again");
+  assert.equal(reactivateJson.data.reactivated, true);
+
+  const warmStats1 = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, { headers: headers(ctx) });
+  assert.equal(warmStats1.headers.get("x-pi-sync-cache"), null);
+  const warmStats2 = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, { headers: headers(ctx) });
+  assert.equal(warmStats2.headers.get("x-pi-sync-cache"), "hit");
+
+  const newUsage = await fetch(`${ctx.base}/api/v2/sessions/push`, {
+    method: "POST",
+    headers: headers(ctx, { "x-device-id": sourceDeviceId, "x-device-name": "old-laptop-online-again" }),
+    body: JSON.stringify({
+      sessions: [],
+      usageEvents: [{
+        id: "after-reactivation",
+        sessionUuid: "new-session-after-reactivation",
+        occurredAt: Date.now(),
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        input: 5,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 6,
+        cost: 0.0001,
+      }],
+    }),
+  });
+  assert.equal(newUsage.status, 200);
+
+  const invalidatedStats = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, { headers: headers(ctx) });
+  assert.equal(invalidatedStats.headers.get("x-pi-sync-cache"), null, "写入后热点缓存必须立即失效");
+
+  const finalDevices = await fetch(`${ctx.base}/api/v1/devices`, { headers: headers(ctx) });
+  const finalDevicesJson = (await finalDevices.json()) as { data: Array<{ deviceId: string; status: string; totalTokens: number }> };
+  const reactivatedDevice = finalDevicesJson.data.find((device) => device.deviceId === sourceDeviceId)!;
+  const historicalTarget = finalDevicesJson.data.find((device) => device.deviceId === ctx.deviceId)!;
+  assert.equal(reactivatedDevice.status, "active");
+  assert.equal(reactivatedDevice.totalTokens, 6, "重新上线后的新用量回到旧 deviceId");
+  assert.equal(historicalTarget.totalTokens, 136, "已迁移历史不会自动回迁");
 });

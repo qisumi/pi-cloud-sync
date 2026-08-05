@@ -1,16 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, loadState, saveState } from "../src/config.js";
 import { buildConfigChanges, applyMergedConfig, sha256 } from "../src/sync/configs.js";
-import { scanLocalSessions, buildSessionChanges, applyPulledSessions, encodeCwdPath, searchLocalSessions } from "../src/sync/sessions.js";
+import {
+  scanLocalSessions,
+  buildSessionChanges,
+  applyPulledSessions,
+  encodeCwdPath,
+  searchLocalSessions,
+  scanSessionIncrements,
+  commitSessionCheckpoint,
+} from "../src/sync/sessions.js";
 import { UsageCollector } from "../src/stats/collector.js";
 import { scanSessionFile, mergeRecords, buildReport } from "../src/stats/analyzer.js";
 import { formatReport } from "../src/stats/report.js";
 import { fetchUsdCnyRate, clearRateCache } from "../src/stats/rates.js";
-import { summarizeName } from "../src/session.js";
+import { generateAiSessionName, summarizeName } from "../src/session.js";
 import type { MergedObject, SessionSnapshot } from "../src/types.js";
 
 function tempAgentDir(): string {
@@ -126,7 +134,8 @@ test("session: scan, diff, apply pulled", () => {
   };
   const res = applyPulledSessions(cfg, state, [snap]);
   assert.equal(res.wrote, 1);
-  assert.equal(state.sessions[uuid].pushed.length, 2);
+  assert.ok(state.sessions[uuid].offset > 0);
+  assert.equal(state.sessions[uuid].serverVersion, 2);
 
   // 再次扫描本地文件：应有 2 条
   const local2 = scanLocalSessions();
@@ -242,19 +251,136 @@ test("session: summarizeName strips markdown/code and truncates", () => {
   assert.equal(summarizeName("``` ```\n###", 32), "（未命名会话）");
 });
 
-test("session: config defaults include autoName & cheap model mapping", () => {
+test("session: config defaults include independent AI auto-name model mapping", () => {
   const c = loadConfig();
   assert.equal(c.session.autoName, true);
   assert.equal(c.session.autoNameMax, 32);
-  assert.equal(c.session.defaultCheapModel, true);
-  // 各订阅内相对低价模型默认值
-  assert.equal(c.session.cheapModelByProvider["deepseek"], "deepseek-v4-flash");
-  assert.equal(c.session.cheapModelByProvider["zai-coding-cn"], "glm-4.7");
-  assert.equal(c.session.cheapModelByProvider["openai-codex"], "gpt-5.6-luna");
+  assert.equal(c.session.autoNameModelByProvider["deepseek"], "deepseek-v4-flash");
+  assert.equal(c.session.autoNameModelByProvider["zai-coding-cn"], "glm-4.7");
+  assert.equal(c.session.autoNameModelByProvider["openai-codex"], "gpt-5.6-luna");
   // saveConfig 往返保留 session
   saveConfig(c);
   const c2 = loadConfig();
-  assert.equal(c2.session.defaultCheapModel, true);
+  assert.deepEqual(c2.session.autoNameModelByProvider, c.session.autoNameModelByProvider);
+});
+
+test("session: AI auto-name uses an independent mapped model and falls back safely", async () => {
+  tempAgentDir();
+  const cfg = loadConfig();
+  cfg.session.autoNameMax = 32;
+  cfg.session.autoNameModelByProvider = { deepseek: "deepseek-v4-flash" };
+  const cheapModel = { provider: "deepseek", id: "deepseek-v4-flash", api: "openai-completions" };
+  const context = {
+    model: { provider: "deepseek", id: "deepseek-v4-pro" },
+    modelRegistry: {
+      find(provider: string, model: string) {
+        assert.equal(provider, "deepseek");
+        assert.equal(model, "deepseek-v4-flash");
+        return cheapModel;
+      },
+      async getApiKeyAndHeaders(model: unknown) {
+        assert.equal(model, cheapModel);
+        return { ok: true, apiKey: "test-key" };
+      },
+    },
+  };
+  let calls = 0;
+  const fakeComplete = async (model: unknown, request: any, options: any) => {
+    calls++;
+    assert.equal(model, cheapModel);
+    assert.deepEqual(request.tools, []);
+    assert.equal(options.maxTokens, 64);
+    assert.equal(options.cacheRetention, "none");
+    assert.match(options.sessionId, /^pi-sync-autoname-/);
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: "修复同步性能" }],
+      api: "openai-completions",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage: {
+        input: 12,
+        output: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 16,
+        cost: { input: 0.001, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.002 },
+      },
+    };
+  };
+
+  const named = await generateAiSessionName(context as any, "main-session", "请修复同步性能", cfg, fakeComplete as any);
+  assert.equal(named.title, "修复同步性能");
+  assert.equal(named.usage?.sessionId, "main-session");
+  assert.equal(named.usage?.model, "deepseek-v4-flash");
+  assert.equal(named.usage?.totalTokens, 16);
+  assert.equal(calls, 1);
+
+  const invalidComplete = async () => ({
+    ...(await fakeComplete(cheapModel, { tools: [] }, { maxTokens: 64, cacheRetention: "none", sessionId: "pi-sync-autoname-invalid" })),
+    content: [{ type: "text", text: "标题：解释\n第二行" }],
+  });
+  const fallback = await generateAiSessionName(context as any, "main-session", "请修复同步性能", cfg, invalidComplete as any);
+  assert.equal(fallback.title, "请修复同步性能");
+
+  const noCredentialContext = {
+    ...context,
+    modelRegistry: { ...context.modelRegistry, async getApiKeyAndHeaders() { return { ok: false }; } },
+  };
+  const noCredential = await generateAiSessionName(noCredentialContext as any, "main-session", "本地兜底标题", cfg, fakeComplete as any);
+  assert.equal(noCredential.title, "本地兜底标题");
+  assert.equal(calls, 2, "无凭据时不应请求命名模型");
+
+  const sessionSource = readFileSync(join(import.meta.dirname, "../src/session.ts"), "utf8");
+  assert.ok(!sessionSource.includes("pi.setModel("), "自动命名不得切换主会话模型");
+});
+
+test("session sync v2: unchanged files are stat-only and partial tails resume incrementally", async () => {
+  const dir = tempAgentDir();
+  const cfg = loadConfig();
+  const state = loadState();
+  const cwd = "C:/work/incremental";
+  const uuid = "incremental-session";
+  const sessionDir = join(dir, "sessions", encodeCwdPath(cwd));
+  mkdirSync(sessionDir, { recursive: true });
+  const file = join(sessionDir, `1_${uuid}.jsonl`);
+  const header = JSON.stringify({ type: "session", version: 3, id: uuid, timestamp: "2026-08-06T00:00:00.000Z", cwd });
+  const e1 = JSON.stringify({ type: "message", id: "e1", parentId: null, timestamp: "2026-08-06T00:00:01.000Z", message: { role: "user", content: "one" } });
+  write(file, `${header}\n${e1}\n`);
+
+  const first = await scanSessionIncrements(state, cfg);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].reconciled, true);
+  assert.deepEqual(first[0].change.entries.map((entry) => entry.id), ["e1"]);
+  commitSessionCheckpoint(state, first[0].checkpoint, 1);
+
+  const unchanged = await scanSessionIncrements(state, cfg);
+  assert.equal(unchanged.length, 0);
+  assert.equal(state.lastScan?.bytesRead, 0, "未变化文件不得读取 JSONL 正文");
+
+  const e2 = JSON.stringify({ type: "message", id: "e2", parentId: "e1", timestamp: "2026-08-06T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "two" }] } });
+  const e3 = JSON.stringify({ type: "message", id: "e3", parentId: "e2", timestamp: "2026-08-06T00:00:03.000Z", message: { role: "user", content: "three" } });
+  const split = Math.floor(e3.length / 2);
+  appendFileSync(file, `${e2}\n${e3.slice(0, split)}`, "utf8");
+  const appended = await scanSessionIncrements(state, cfg);
+  assert.equal(appended.length, 1);
+  assert.deepEqual(appended[0].change.entries.map((entry) => entry.id), ["e2"]);
+  assert.ok(appended[0].checkpoint.offset < appended[0].checkpoint.size, "残缺尾行不推进游标");
+  commitSessionCheckpoint(state, appended[0].checkpoint, 2);
+
+  appendFileSync(file, `${e3.slice(split)}\n`, "utf8");
+  const resumed = await scanSessionIncrements(state, cfg);
+  assert.equal(resumed.length, 1);
+  assert.deepEqual(resumed[0].change.entries.map((entry) => entry.id), ["e3"]);
+  commitSessionCheckpoint(state, resumed[0].checkpoint, 3);
+
+  writeFileSync(file, `${header}\n${e1}\n`, "utf8");
+  const rewritten = await scanSessionIncrements(state, cfg);
+  assert.equal(rewritten.length, 1);
+  assert.equal(rewritten[0].reconciled, true);
+  assert.deepEqual(rewritten[0].change.entries.map((entry) => entry.id), ["e1"]);
 });
 
 test("stats: session scan produces records", () => {
@@ -329,7 +455,7 @@ test("auth.json: provider-level diff & v4 migration", () => {
   const cfg = loadConfig();
   // v4 迁移：includeConfigs 应包含 auth.json
   assert.ok(cfg.sync.includeConfigs.includes("auth.json"), "auth.json in defaults");
-  assert.equal(cfg.version, 4);
+  assert.equal(cfg.version, 5);
   cfg.sync.includeConfigs = ["settings.json", "keybindings.json", "models.json", "auth.json"];
   saveConfig(cfg);
 
@@ -368,7 +494,7 @@ test("config: v3 -> v4 migration adds auth.json once", () => {
   write(join(dir, "pi-sync.json"), JSON.stringify(old));
   const cfg = loadConfig();
   assert.ok(cfg.sync.includeConfigs.includes("auth.json"), "migration added auth.json");
-  assert.equal(cfg.version, 4);
+  assert.equal(cfg.version, 5);
   // 已持久化
   const reread = JSON.parse(readFileSync(join(dir, "pi-sync.json"), "utf8"));
   assert.ok(reread.sync.includeConfigs.includes("auth.json"));

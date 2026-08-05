@@ -140,6 +140,28 @@ export interface CodexAuth {
   accountId: string | null;
 }
 
+export interface QuotaCredentials {
+  deepseek: string | null;
+  zai: string | null;
+  codex: CodexAuth | null;
+}
+
+/** 单次额度探测只读一次各凭据文件。 */
+export function readQuotaCredentials(): QuotaCredentials {
+  const piAuth = readPiAuth();
+  return {
+    deepseek: process.env.DEEPSEEK_API_KEY || findKey(piAuth, DEEPSEEK_IDS) || null,
+    zai:
+      findKey(piAuth, ZAI_IDS) ||
+      process.env.ZAI_CODING_CN_API_KEY ||
+      process.env.ZAI_API_KEY ||
+      process.env.ZHIPU_API_KEY ||
+      process.env.GLM_API_KEY ||
+      null,
+    codex: readCodexAuth(),
+  };
+}
+
 export function codexAuthPath(): string {
   return join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), "auth.json");
 }
@@ -160,10 +182,10 @@ export function readCodexAuth(path: string = codexAuthPath()): CodexAuth | null 
 
 /* ---------------- DeepSeek：账户余额（金额） ---------------- */
 
-export async function probeDeepSeek(fetchImpl: FetchLike = defaultFetch()): Promise<QuotaProbeResult> {
+export async function probeDeepSeek(fetchImpl: FetchLike = defaultFetch(), credentials?: QuotaCredentials): Promise<QuotaProbeResult> {
   const ts = Date.now();
   const r = baseResult("deepseek", "DeepSeek", ts);
-  const key = deepseekKey();
+  const key = credentials?.deepseek ?? deepseekKey();
   if (!key) {
     return failResult(r, false, "未配置：auth.json 无 deepseek key 或未设 DEEPSEEK_API_KEY");
   }
@@ -172,6 +194,7 @@ export async function probeDeepSeek(fetchImpl: FetchLike = defaultFetch()): Prom
     const res = await withTimeout(
       fetchImpl("https://api.deepseek.com/user/balance", {
         headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
       }),
       TIMEOUT_MS,
     );
@@ -219,10 +242,10 @@ interface ZaiLimit {
   windowSeconds?: number | string;
 }
 
-export async function probeZai(fetchImpl: FetchLike = defaultFetch()): Promise<QuotaProbeResult> {
+export async function probeZai(fetchImpl: FetchLike = defaultFetch(), credentials?: QuotaCredentials): Promise<QuotaProbeResult> {
   const ts = Date.now();
   const r = baseResult("zai", "Z.AI GLM 编程套餐", ts);
-  const key = zaiKey();
+  const key = credentials?.zai ?? zaiKey();
   if (!key) {
     return failResult(r, false, "未配置：auth.json 无 zai/zai-coding-cn key（请先 /login）或未设 ZAI_CODING_CN_API_KEY");
   }
@@ -238,6 +261,7 @@ export async function probeZai(fetchImpl: FetchLike = defaultFetch()): Promise<Q
       try {
         const res = await withTimeout(
           fetchImpl(url, {
+            signal: AbortSignal.timeout(TIMEOUT_MS),
             headers: {
               authorization: auth,
               accept: "application/json",
@@ -378,10 +402,55 @@ function safeSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "") || "limit";
 }
 
-export async function probeCodex(fetchImpl: FetchLike = defaultFetch()): Promise<QuotaProbeResult> {
+function codexUsedPct(window: JsonObject): number | null {
+  const direct = clampPct(
+    num(
+      window.used_percent ??
+        window.usedPercent ??
+        window.used_pct ??
+        window.usedPct ??
+        window.usage_percent ??
+        window.usagePercent ??
+        window.percentage,
+    ),
+  );
+  if (direct != null) return direct;
+  const remaining = clampPct(
+    num(window.remaining_percent ?? window.remainingPercent ?? window.remaining_pct ?? window.remainingPct),
+  );
+  if (remaining != null) return 100 - remaining;
+  const used = num(window.used ?? window.current ?? window.current_usage ?? window.currentUsage);
+  const limit = num(window.limit ?? window.total ?? window.max ?? window.limit_value ?? window.limitValue);
+  return used != null && limit != null && limit > 0 ? clampPct((used / limit) * 100) : null;
+}
+
+/**
+ * Codex/ChatGPT 的内部快照曾出现多层 data、按 limit id 分桶等形态。
+ * 常规字段未命中时递归收集“像额度窗口”的对象，避免因外层包装变化整页报无数据。
+ */
+function collectCodexWindows(value: unknown, path = "", depth = 0, seen = new Set<unknown>()): Array<{ path: string; window: JsonObject }> {
+  if (depth > 6 || !value || typeof value !== "object" || seen.has(value)) return [];
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => collectCodexWindows(item, `${path}.${index}`, depth + 1, seen));
+  }
+  const object = value as JsonObject;
+  const hasPct = codexUsedPct(object) != null;
+  const hasWindowHint = [
+    "limit_window_seconds", "limitWindowSeconds", "window_seconds", "windowSeconds",
+    "window_minutes", "windowMinutes", "resets_at", "resetsAt", "reset_at", "resetAt",
+    "reset_after_seconds", "resetAfterSeconds",
+  ].some((key) => object[key] != null);
+  const here = hasPct && hasWindowHint ? [{ path, window: object }] : [];
+  return here.concat(
+    Object.entries(object).flatMap(([key, child]) => collectCodexWindows(child, path ? `${path}.${key}` : key, depth + 1, seen)),
+  );
+}
+
+export async function probeCodex(fetchImpl: FetchLike = defaultFetch(), credentials?: QuotaCredentials): Promise<QuotaProbeResult> {
   const ts = Date.now();
   const r = baseResult("codex", "Codex (OpenAI 订阅)", ts);
-  const auth = readCodexAuth();
+  const auth = credentials?.codex ?? readCodexAuth();
   if (!auth) {
     return failResult(r, false, "未配置：~/.codex/auth.json 无 tokens.access_token（请先 codex login）");
   }
@@ -389,6 +458,7 @@ export async function probeCodex(fetchImpl: FetchLike = defaultFetch()): Promise
   try {
     const res = await withTimeout(
       fetchImpl("https://chatgpt.com/backend-api/wham/usage", {
+        signal: AbortSignal.timeout(TIMEOUT_MS),
         headers: {
           authorization: `Bearer ${auth.accessToken}`,
           "openai-beta": "codex-1",
@@ -431,15 +501,7 @@ export async function probeCodex(fetchImpl: FetchLike = defaultFetch()): Promise
       fallbackKind: CodexWindowKind,
     ) => {
       if (!window) return;
-      const usedPct = clampPct(
-        num(
-          window.used_percent ??
-            window.usedPercent ??
-            window.usage_percent ??
-            window.usagePercent ??
-            window.percentage,
-        ),
-      );
+      const usedPct = codexUsedPct(window);
       if (usedPct == null) return;
       const windowSeconds = codexWindowSeconds(window);
       const kind = classifyCodexWindow(windowSeconds, fallbackKind);
@@ -516,6 +578,20 @@ export async function probeCodex(fetchImpl: FetchLike = defaultFetch()): Promise
         const name = typeof nameValue === "string" && nameValue.trim() ? nameValue.trim().slice(0, 48) : limitId;
         pushRateLimit(`codex.additional.${safeSlug(limitId)}`, name, snapshot);
       }
+    }
+
+    if (meters.length === 0) {
+      collectCodexWindows(j).forEach(({ path, window }, index) => {
+        const normalized = path.toLowerCase();
+        const fallback: CodexWindowKind = normalized.includes("week") || normalized.includes("secondary")
+          ? "weekly"
+          : normalized.includes("month") || normalized.includes("tertiary")
+            ? "monthly"
+            : index === 0
+              ? "fiveHour"
+              : "weekly";
+        pushWindow("codex", "", window, fallback);
+      });
     }
 
     const resetCredits = firstObject(

@@ -5,7 +5,7 @@ import { generateToken, hashToken } from "../auth.js";
 import { listTokens } from "./admin-tokens.js";
 
 /** 管理端点：令牌管理（需 ADMIN_TOKEN） */
-export function registerAdminRoutes(app: FastifyInstance, dbs: SyncDb) {
+export function registerAdminRoutes(app: FastifyInstance, dbs: SyncDb, invalidateTokens: () => void = () => {}) {
   // 注意：auth 中间件在 index.ts 中按路径前缀保护 /api/v1/admin
 
   app.post<{ Body: { name?: string } }>("/api/v1/admin/tokens", async (req, reply) => {
@@ -14,6 +14,7 @@ export function registerAdminRoutes(app: FastifyInstance, dbs: SyncDb) {
     dbs.db
       .prepare(`INSERT INTO tokens (name, token, token_hash, created_at) VALUES (?, ?, ?, ?)`)
       .run(name, token, hashToken(token), now());
+    invalidateTokens();
     return { ok: true, data: { name, token } };
   });
 
@@ -31,6 +32,7 @@ export function registerAdminRoutes(app: FastifyInstance, dbs: SyncDb) {
     if (res.changes === 0) {
       return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "token not found" });
     }
+    invalidateTokens();
     return { ok: true, data: { deleted: id } };
   });
 

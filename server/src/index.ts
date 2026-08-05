@@ -1,4 +1,6 @@
 import Fastify from "fastify";
+import compress from "@fastify/compress";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,14 +23,26 @@ export async function startServer(cfg = loadConfig()) {
   const dbs = new SyncDb(cfg.dbPath);
   const startedAt = Date.now();
 
-  const tokenProvider = (): TokenRecord[] =>
-    dbs.db
-      .prepare(`SELECT id, name, token_hash, created_at FROM tokens`)
-      .all() as unknown as TokenRecord[];
+  let tokenCache: TokenRecord[] | null = null;
+  const tokenProvider = (): TokenRecord[] => {
+    if (!tokenCache) {
+      tokenCache = dbs.db
+        .prepare(`SELECT id, name, token_hash, created_at FROM tokens`)
+        .all() as unknown as TokenRecord[];
+    }
+    return tokenCache;
+  };
+  const invalidateTokens = () => {
+    tokenCache = null;
+  };
+  await app.register(compress, { threshold: 1024 });
+  const hotResponseCache = new Map<string, { expiresAt: number; payload: string }>();
+  const isHotRead = (method: string, url: string) =>
+    method === "GET" && (url.startsWith("/api/v1/web/stats") || url.startsWith("/api/v1/web/sessions"));
 
   // 认证中间件：/api/v1/* 需要 Bearer token；/api/v1/admin/* 需要管理令牌
   app.addHook("onRequest", async (req, reply) => {
-    if (req.url.startsWith("/api/v1/")) {
+    if (req.url.startsWith("/api/v1/") || req.url.startsWith("/api/v2/")) {
       if (req.url.startsWith("/api/v1/admin/")) {
         if (!verifyAdminToken(cfg.adminToken, req.headers.authorization)) {
           return reply
@@ -44,6 +58,34 @@ export async function startServer(cfg = loadConfig()) {
           .send({ ok: false, error: "UNAUTHORIZED", message: "invalid or missing token" });
       }
     }
+  });
+
+  // 网页热点 GET 使用极短读缓存；任何 API 写请求到达时立即失效，避免展示旧统计。
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.url.startsWith("/api/") && req.method !== "GET" && req.method !== "HEAD") {
+      hotResponseCache.clear();
+      return;
+    }
+    if (!isHotRead(req.method, req.url)) return;
+    const cached = hotResponseCache.get(req.url);
+    if (!cached) return;
+    if (cached.expiresAt <= Date.now()) {
+      hotResponseCache.delete(req.url);
+      return;
+    }
+    return reply.header("x-pi-sync-cache", "hit").type("application/json; charset=utf-8").send(cached.payload);
+  });
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (
+      isHotRead(req.method, req.url) &&
+      reply.statusCode === 200 &&
+      reply.getHeader("x-pi-sync-cache") !== "hit" &&
+      typeof payload === "string"
+    ) {
+      hotResponseCache.set(req.url, { expiresAt: Date.now() + 1_500, payload });
+      if (hotResponseCache.size > 200) hotResponseCache.delete(hotResponseCache.keys().next().value!);
+    }
+    return payload;
   });
 
   app.get("/", async () => ({
@@ -71,6 +113,9 @@ export async function startServer(cfg = loadConfig()) {
     if (!webHtml) {
       return reply.code(404).send("web.html not found — rebuild the server");
     }
+    const etag = `\"${createHash("sha256").update(webHtml).digest("base64url")}\"`;
+    reply.header("etag", etag).header("cache-control", "no-cache");
+    if (_req.headers["if-none-match"] === etag) return reply.code(304).send();
     return reply.send(webHtml);
   });
 
@@ -78,7 +123,7 @@ export async function startServer(cfg = loadConfig()) {
   registerDeviceRoutes(app, dbs);
   registerSyncRoutes(app, dbs, cfg);
   registerConflictRoutes(app, dbs);
-  registerAdminRoutes(app, dbs);
+  registerAdminRoutes(app, dbs, invalidateTokens);
   registerWebRoutes(app, dbs);
   registerStatsRoutes(app, dbs);
 

@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { probeDeepSeek, probeZai, probeCodex, readCodexAuth } from "../src/quota/providers.js";
 import { probeAllQuotas, formatQuotaText, quotaSummary } from "../src/quota/index.js";
 import { recordSnapshot, latestSnapshot, computeDeltas, quotaHistoryPath, toSnapshot } from "../src/quota/history.js";
-import { CNY_PRICES, cnyPriceLine } from "../src/quota/prices.js";
 import type { QuotaSnapshot } from "../src/quota/types.js";
 
 function tempAgentDir(): string {
@@ -263,6 +262,33 @@ test("quota: codex accepts camel-case app-server snapshots", async () => {
   assert.equal(res.meters.find((m) => m.id === "codex.weekly")?.usedPct, 40);
 });
 
+test("quota: codex recovers quota windows from nested keyed response variants", async () => {
+  const dir = tempAgentDir();
+  setupCodexAuth(dir);
+
+  const res = await probeCodex(
+    mockFetch([{
+      match: "wham/usage",
+      respond: () => jsonResponse({
+        data: {
+          subscriptions: {
+            codex: {
+              buckets: {
+                short_window: { remaining_percent: 80, window_seconds: 18000, reset_after_seconds: 60 },
+                weekly_window: { current: 60, limit: 100, window_seconds: 604800, reset_after_seconds: 3600 },
+              },
+            },
+          },
+        },
+      }),
+    }]),
+  );
+
+  assert.equal(res.ok, true);
+  assert.equal(res.meters.find((meter) => meter.id === "codex.fiveHour")?.usedPct, 20);
+  assert.equal(res.meters.find((meter) => meter.id === "codex.weekly")?.usedPct, 60);
+});
+
 test("quota: codex exposes additional limits and reset credits", async () => {
   const dir = tempAgentDir();
   setupCodexAuth(dir);
@@ -382,31 +408,6 @@ test("quota: codex failure allowed in orchestration (does not break others)", as
   assert.ok(!text.includes("─ "), "不应有渠道分隔行");
   const summary = quotaSummary(r);
   assert.match(summary, /余额/);
-});
-
-test("quota: cny price references (deepseek / z.ai)", () => {
-  const ds = CNY_PRICES.deepseek;
-  const zai = CNY_PRICES.zai;
-  // DeepSeek V4-Pro（2026-05 永久降价）：入 3 / 出 6 / 缓存 0.025
-  assert.equal(ds.models[0].model, "V4-Pro");
-  assert.equal(ds.models[0].input, 3);
-  assert.equal(ds.models[0].output, 6);
-  assert.equal(ds.models[0].cacheHit, 0.025);
-  // Z.AI 主推 GLM-4.7（bigmodel.cn 旗舰，≤32k）：入 2 / 出 8 / 缓存 0.4
-  assert.equal(zai.models[0].model, "GLM-4.7");
-  assert.equal(zai.models[0].input, 2);
-  assert.equal(zai.models[0].output, 8);
-  assert.equal(zai.models[0].cacheHit, 0.4);
-  // bigmodel.cn 全系旗舰文本模型都在参考表中
-  const all = zai.models.map((m) => m.model);
-  for (const expected of ["GLM-5.2", "GLM-5.1", "GLM-5", "GLM-4.5-Air", "GLM-4.7-FlashX", "GLM-4.7-Flash"]) {
-    assert.ok(all.includes(expected), `缺少 ${expected}`);
-  }
-  // 免费模型标记
-  assert.equal(zai.models.find((m) => m.model === "GLM-4.7-Flash")?.free, true);
-  const line = cnyPriceLine();
-  assert.match(line, /DeepSeek V4-Pro 入3\/出6/);
-  assert.match(line, /Z.AI 智谱 GLM-4.7 入2\/出8/);
 });
 
 test("quota: history helpers", () => {

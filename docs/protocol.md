@@ -1,13 +1,15 @@
-# 同步协议 / Sync Protocol (v1)
+# 同步协议 / Sync Protocol (v2)
 
-所有请求使用 JSON；除 `/api/v1/health` 外均需 `Authorization: Bearer <token>`。
+所有请求使用 JSON；除 `/api/v1/health` 外，`/api/v1/*` 与 `/api/v2/*` 均需 `Authorization: Bearer <token>`。
 推送会话/对象时需携带 `X-Device-Id` 与 `X-Device-Name` 请求头（设备注册与来源标注）。
 
 ## 数据模型
 
 - **objects**：配置/扩展文件/包清单，key 如 `config/settings.json`、`plugin/extension/foo.ts`、`plugin/package-manifest`。
 - **config_field_versions**：JSON 对象的字段级版本表（`object_key, path, version, value, updated_by`）。
-- **session_headers / session_entries**：会话头与条目（entry id 去重，来源设备标注）。
+- **session_headers / session_entries / session_usage**：会话头、条目和预聚合用量（entry id 去重，稳定 deviceId 来源标注）。
+- **session_change_index**：会话 header / entry / tombstone 的单调变更游标。
+- **devices / device_merge_history**：稳定设备身份、历史来源与永久合并审计。
 - **conflicts**：未解决/已解决的冲突记录。
 
 ## 字段级合并规则（JSON 配置）
@@ -25,21 +27,42 @@
 POST /api/v1/devices/heartbeat          # 注册/心跳 → { deviceId }
 POST /api/v1/sync/push                  # { changes: [{kind,key,baseSha256,jsonFields?,contentB64?,sha256?,mtime?}] }
 POST /api/v1/sync/pull                  # { since?, keys? } → { objects, sessions, packageManifest, serverTime }
-POST /api/v1/sessions/push              # { sessions: [{uuid,cwd,name?,headerJson?,createdAt?,baseVersion,entries,mtime,deleted?}] }
-POST /api/v1/sessions/pull              # { since? } → { sessions: [{uuid,cwd,name,headerJson,createdAt,version,deleted,lines[]}] }
+POST /api/v2/sessions/push              # { sessions, usageEvents? } → { sessions, conflicts, acceptedUsageEvents }
+POST /api/v2/sessions/pull              # { cursor, limit, maxBytes } → { changes, nextCursor, hasMore }
 GET  /api/v1/conflicts                  # 冲突列表
 POST /api/v1/conflicts/:id/resolve      # { resolution: keep-a|keep-b|manual, content? }
 POST /api/v1/sessions/restore           # { uuid }
 GET  /api/v1/devices                    # 设备列表
+PATCH /api/v1/devices/:id               # { name } 重命名
+POST /api/v1/devices/merge/preview      # { sourceDeviceIds, targetDeviceId }
+POST /api/v1/devices/merge              # 上述字段 + confirmTargetName，事务化永久合并
 GET  /api/v1/health                     # 健康检查
 ```
 
+`/api/v1/sessions/push|pull` 暂时保留给旧客户端；新客户端必须使用 v2。服务端健康响应的 `protocol` 必须与插件一致，
+不匹配时插件停止同步并提示同时升级。
+
+## 会话增量与确认
+
+- 客户端按 JSONL 文件保存 `size + mtime + offset + boundaryHash`。未变化文件只执行 `stat`；追加文件只读新增完整行。
+- 文件截断、覆盖或边界指纹异常时，客户端从头全量对账；条目仍按 `(uuid, entryId)` 幂等合并。
+- 单次推送最多 250 条或约 2 MiB；只有服务端完整确认后才推进文件偏移。
+- 拉取按 `session_change_index.seq` 分页。`nextCursor` 只在本地安全写入或进入 `pi-sync-inbox` 后保存。
+- `usageEvents` 用于 AI 自动命名等不进入正文的独立用量，服务端按事件 id 幂等写入 `session_usage`。
+
 ## 会话条目格式
 
-服务器按 `(uuid, entryId)` 存储 JSONL 行原文；相同 entryId 内容不同时保留
-`received_at` 较新者并记录冲突。客户端合并时以本地条目优先，服务器条目补齐缺口。
+服务器按 `(uuid, entryId)` 存储精简后的 JSONL 行；相同 entryId 内容不同时保留
+`received_at` 较新者并记录冲突。客户端已有的完整本地行优先，远端只补齐缺失条目，避免精简副本覆盖工具输出。
+
+## 设备身份与合并
+
+- `deviceId` 是稳定身份，设备名只是可修改展示属性；统计筛选使用 deviceId。
+- 迁移旧库时，唯一名称自动关联现有设备；无匹配或同名歧义会生成 `legacy` 历史来源。
+- 合并必须先预览并精确确认目标设备名；服务端在单事务中改写会话、用量、对象、字段版本和冲突来源。
+- 源设备标记 `merged`。同一旧 deviceId 再次心跳时恢复为独立设备，但已合并历史不回迁。
 
 ## 兼容性与扩展
 
-- 协议版本号 `SYNC_PROTOCOL_VERSION = 1`，扩展端与服务器端校验。
-- 新增字段使用 optional 语义，向后兼容。
+- 协议版本号 `SYNC_PROTOCOL_VERSION = 2`，扩展端与服务器端强校验。
+- 数据库与插件状态自动迁移；旧的 `pushed: entryId[]` 在加载时丢弃，不再随历史增长。

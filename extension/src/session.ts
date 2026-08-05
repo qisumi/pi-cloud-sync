@@ -1,22 +1,30 @@
-/**
- * 会话自动命名 + 新会话低价默认模型。
- *
- * - 自动命名：新会话收到第一条用户输入（interactive、非命令）时，取消息摘要设为会话名。
- * - 低价默认模型：session_start(reason=new) 时，若当前模型所属 provider 在映射中有更低价模型，
- *   自动切换到该模型（仅在全新会话应用一次，不打扰已选择模型的会话）。
- */
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+/** 会话自动命名：独立调用同渠道低价模型，不修改主会话模型。 */
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { complete } from "@earendil-works/pi-ai/compat";
+import { uuidv7, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { SyncConfig } from "./config.js";
 
-/** 从用户消息文本生成简短会话名（去代码/去 markdown/压缩空白/截断） */
+export interface AutoNameUsage {
+  sessionId: string;
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number;
+}
+
+/** 从用户消息文本生成稳定的本地兜底标题。 */
 export function summarizeName(text: string, max = 32): string {
   let t = text
-    .replace(/```[\s\S]*?```/g, " ") // 代码块整体去掉
-    .replace(/`[^`]*`/g, " ") // 行内代码
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // markdown 链接 → 链接文字
-    .replace(/[*_~#>`]/g, "") // 强调/标题符号直接去除
-    .replace(/[=\-+[\](){}|\\/]/g, " ") // 其余符号 → 空格
-    .replace(/\s*([：:，,。.、；;！!？?）)])/g, "$1") // 去掉中文标点前的空格
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_~#>`]/g, "")
+    .replace(/[=\-+[\](){}|\\/]/g, " ")
+    .replace(/\s*([：:，,。.、；;！!？?）)])/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
   if (!t) return "（未命名会话）";
@@ -24,86 +32,134 @@ export function summarizeName(text: string, max = 32): string {
   return t;
 }
 
-/** 注册会话相关事件钩子（自动命名 / 低价默认模型） */
-export function registerSessionHooks(pi: ExtensionAPI, getCfg: () => SyncConfig): void {
-  const named = new Set<string>();
-  const cheapApplied = new Set<string>();
+function titleFromResponse(message: AssistantMessage, max: number): string | null {
+  if (message.stopReason === "error" || message.stopReason === "aborted") return null;
+  const raw = message.content
+    .filter((part): part is Extract<(typeof message.content)[number], { type: "text" }> => part.type === "text")
+    .map((part) => part.text)
+    .join("")
+    .trim();
+  if (!raw || raw.includes("\n") || raw.length > Math.max(80, max * 2)) return null;
+  const clean = raw
+    .replace(/^[\s"'“”‘’`#*_~-]+|[\s"'“”‘’`#*_~-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean || clean.length > max || /^(标题|title)\s*[:：]/i.test(clean)) return null;
+  return clean;
+}
 
-  // 自动命名：每个会话第一条用户输入时生成名字（仅一次）
+type CompleteFn = typeof complete;
+
+/** 独立执行一次命名请求；导出便于覆盖超时、无凭据和无效输出测试。 */
+export async function generateAiSessionName(
+  ctx: ExtensionContext,
+  sessionId: string,
+  text: string,
+  cfg: SyncConfig,
+  completeFn: CompleteFn = complete,
+): Promise<{ title: string; usage?: AutoNameUsage }> {
+  const fallback = summarizeName(text, cfg.session.autoNameMax ?? 32);
+  const provider = ctx.model?.provider;
+  const modelId = provider ? cfg.session.autoNameModelByProvider?.[provider] : undefined;
+  if (!provider || !modelId) return { title: fallback };
+
+  const model = ctx.modelRegistry.find(provider, modelId) as Model<Api> | undefined;
+  if (!model) return { title: fallback };
+  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  if (!auth.ok || (!auth.apiKey && !auth.headers)) return { title: fallback };
+
+  try {
+    const message = await completeFn(
+      model,
+      {
+        systemPrompt:
+          "为编程助手会话生成一个简短标题。只输出一行、与用户语言一致的标题；不要引号、Markdown、前缀或解释。",
+        messages: [{ role: "user", content: text.slice(0, 4000), timestamp: Date.now() }],
+        tools: [],
+      },
+      {
+        apiKey: auth.apiKey,
+        headers: auth.headers,
+        env: auth.env,
+        maxTokens: 64,
+        temperature: 0.2,
+        cacheRetention: "none",
+        sessionId: `pi-sync-autoname-${uuidv7()}`,
+        signal: AbortSignal.timeout(12_000),
+        timeoutMs: 12_000,
+        maxRetries: 0,
+      },
+    );
+    const title = titleFromResponse(message, cfg.session.autoNameMax ?? 32) ?? fallback;
+    return {
+      title,
+      usage: {
+        sessionId,
+        provider,
+        model: model.id,
+        input: message.usage.input,
+        output: message.usage.output,
+        cacheRead: message.usage.cacheRead,
+        cacheWrite: message.usage.cacheWrite,
+        totalTokens: message.usage.totalTokens,
+        cost: message.usage.cost.total,
+      },
+    };
+  } catch {
+    return { title: fallback };
+  }
+}
+
+export function registerSessionHooks(
+  pi: ExtensionAPI,
+  getCfg: () => SyncConfig,
+  onUsage?: (usage: AutoNameUsage) => void,
+): void {
+  const attempted = new Set<string>();
+
   pi.on("input", (event, ctx) => {
     const cfg = getCfg();
-    if (!cfg.session?.autoName) return;
-    if (event.source !== "interactive") return;
+    if (!cfg.session?.autoName || event.source !== "interactive") return;
     const text = event.text.trim();
-    if (!text || text.startsWith("/")) return; // 命令/空输入不算
+    if (!text || text.startsWith("/")) return;
 
-    const sm = ctx.sessionManager;
-    const sid = sm.getSessionId();
-    if (!sid || named.has(sid)) return;
-    if (sm.getSessionName()) {
-      named.add(sid); // 已有名字（用户手动设置过），不再自动覆盖
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (!sessionId || attempted.has(sessionId)) return;
+    if (ctx.sessionManager.getSessionName()) {
+      attempted.add(sessionId);
       return;
     }
-    named.add(sid);
-    try {
-      pi.setSessionName(summarizeName(text, cfg.session.autoNameMax ?? 32));
-    } catch {
-      // 忽略：命名失败不影响主流程
-    }
-  });
+    attempted.add(sessionId);
 
-  // 低价默认模型：仅对全新会话（reason=new）应用一次
-  pi.on("session_start", async (event, ctx) => {
-    const cfg = getCfg();
-    if (!cfg.session?.defaultCheapModel) return;
-    if (event.reason !== "new") return;
-
-    const sm = ctx.sessionManager;
-    const sid = sm.getSessionId();
-    if (!sid || cheapApplied.has(sid)) return;
-    cheapApplied.add(sid);
-
-    const cur = ctx.model;
-    if (!cur?.provider) return;
-    const targetId = cfg.session.cheapModelByProvider?.[cur.provider];
-    if (!targetId || targetId === cur.id) return;
-
-    const target = ctx.modelRegistry.find(cur.provider, targetId);
-    if (!target) return;
-    try {
-      const ok = await pi.setModel(target);
-      if (ok && ctx.hasUI) {
-        ctx.ui.notify(`${cur.provider} 新会话默认使用低价模型 ${target.id}`, "info");
+    void generateAiSessionName(ctx, sessionId, text, cfg).then((result) => {
+      // 请求已经产生的用量必须统计，即使标题因手动命名/会话切换被丢弃。
+      if (result.usage) onUsage?.(result.usage);
+      // 请求期间会话切换、用户手动命名或其他插件命名时均放弃写入。
+      if (ctx.sessionManager.getSessionId() !== sessionId || ctx.sessionManager.getSessionName()) return;
+      try {
+        pi.setSessionName(result.title);
+      } catch {
+        // 命名失败不能影响主对话。
       }
-    } catch {
-      // 忽略：模型切换失败不影响会话
-    }
+    });
   });
 }
 
-/** 当前会话信息 + 命名/低价模型配置 */
 export function sessionStatus(cfg: SyncConfig, ctx: ExtensionCommandContext): string {
-  const sm = ctx.sessionManager;
   const cur = ctx.model;
-  const cheap = cfg.session?.cheapModelByProvider ?? {};
-  const cheapLines = Object.keys(cheap).length
-    ? Object.entries(cheap)
-        .map(([p, m]) => `  ${p} → ${m}`)
-        .join("\n")
-    : "  无";
+  const mapping = cfg.session?.autoNameModelByProvider ?? {};
   return [
     "═══ 会话 Session ═══",
-    `会话 ID: ${sm.getSessionId() ?? "-"}`,
-    `会话名称: ${sm.getSessionName() ?? "（未命名）"}`,
+    `会话 ID: ${ctx.sessionManager.getSessionId() ?? "-"}`,
+    `会话名称: ${ctx.sessionManager.getSessionName() ?? "（未命名）"}`,
     `当前模型: ${cur ? `${cur.provider}/${cur.id}` : "-"}`,
-    `自动命名: ${cfg.session?.autoName ? "开" : "关"}（最长 ${cfg.session?.autoNameMax ?? 32} 字，取首条消息摘要）`,
-    `新会话低价模型: ${cfg.session?.defaultCheapModel ? "开" : "关"}`,
-    `低价模型映射:`,
-    cheapLines,
+    `AI 自动命名: ${cfg.session?.autoName ? "开" : "关"}（首条消息，最长 ${cfg.session?.autoNameMax ?? 32} 字）`,
+    "命名专用低价模型:",
+    ...Object.entries(mapping).map(([provider, model]) => `  ${provider} → ${model}`),
+    "主会话模型不会被自动切换。",
   ].join("\n");
 }
 
-/** 手动重命名当前会话 */
 export function cmdSessionRename(pi: ExtensionAPI, args: string): string {
   const name = args.trim();
   if (!name) return "用法: /qisumi-session-rename <名称>";

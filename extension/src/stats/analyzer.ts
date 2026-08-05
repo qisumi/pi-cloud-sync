@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { sessionsDir } from "../sync/sessions.js";
+import { agentDir } from "../config.js";
 import type { UsageRecord, UsageInput } from "./collector.js";
 
 /* ---------------- 会话扫描（历史数据补齐） ---------------- */
@@ -108,26 +109,75 @@ export function scanSessionFile(
 export function scanAllSessions(device: string): UsageRecord[] {
   const root = sessionsDir();
   if (!existsSync(root)) return [];
-  const out: UsageRecord[] = [];
-  const seen = new Set<string>();
+  const indexPath = join(agentDir(), "pi-usage-index.json");
+  const index = loadUsageIndex(indexPath);
+  const found = new Set<string>();
+  let dirty = false;
 
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name);
       if (entry.isDirectory()) walk(p);
       else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        const records = parseSessionForScan(p, device);
-        for (const r of records) {
-          if (!seen.has(r.key)) {
-            seen.add(r.key);
-            out.push(r);
-          }
+        const key = relative(root, p).replace(/\\/g, "/");
+        found.add(key);
+        const info = statSync(p);
+        const cached = index.files[key];
+        if (!cached || cached.size !== info.size || cached.mtimeMs !== info.mtimeMs) {
+          index.files[key] = { size: info.size, mtimeMs: info.mtimeMs, records: parseSessionForScan(p, device) };
+          dirty = true;
+        } else if (cached.records.some((record) => record.device !== device)) {
+          cached.records.forEach((record) => { record.device = device; });
+          dirty = true;
         }
       }
     }
   };
   walk(root);
+  for (const key of Object.keys(index.files)) {
+    if (!found.has(key)) {
+      delete index.files[key];
+      dirty = true;
+    }
+  }
+  if (dirty) saveUsageIndex(indexPath, index);
+  const seen = new Set<string>();
+  const out: UsageRecord[] = [];
+  for (const file of Object.values(index.files)) {
+    for (const record of file.records) {
+      if (!seen.has(record.key)) {
+        seen.add(record.key);
+        out.push(record);
+      }
+    }
+  }
   return out;
+}
+
+interface UsageIndex {
+  version: 1;
+  files: Record<string, { size: number; mtimeMs: number; records: UsageRecord[] }>;
+}
+
+let memoryUsageIndex: { path: string; value: UsageIndex } | null = null;
+
+function loadUsageIndex(path: string): UsageIndex {
+  if (memoryUsageIndex?.path === path) return memoryUsageIndex.value;
+  let value: UsageIndex = { version: 1, files: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as UsageIndex;
+    if (parsed.version === 1 && parsed.files && typeof parsed.files === "object") value = parsed;
+  } catch {
+    // 首次运行或旧索引损坏时按需重建。
+  }
+  memoryUsageIndex = { path, value };
+  return value;
+}
+
+function saveUsageIndex(path: string, index: UsageIndex): void {
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, JSON.stringify(index), "utf8");
+  renameSync(temporary, path);
 }
 
 function parseSessionForScan(path: string, device: string): UsageRecord[] {

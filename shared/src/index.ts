@@ -126,12 +126,65 @@ export interface MergedSession {
   deleted: boolean;
   updatedBy: string;
   updatedAt: number;
-  /** 服务器上已知的 entryId 集合（用于客户端更新游标） */
-  entryIds: string[];
   /** 本次接受的条目数 */
   acceptedEntries: number;
   /** 本次冲突条目数 */
   conflicts: number;
+}
+
+/** 不进入会话正文的插件内部用量（例如 AI 自动命名）。 */
+export interface UsageEventChange {
+  id: string;
+  sessionUuid: string;
+  occurredAt: number;
+  provider: string;
+  model: string;
+  requests?: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: number;
+}
+
+export type SessionDelta =
+  | {
+      seq: number;
+      kind: "header";
+      op: "upsert" | "tombstone";
+      session: Omit<SessionSnapshot, "lines">;
+    }
+  | {
+      seq: number;
+      kind: "entry";
+      op: "insert" | "update";
+      uuid: string;
+      session: Omit<SessionSnapshot, "lines">;
+      entry: SessionEntryChange & { sourceDeviceId: string; sourceDevice: string };
+    };
+
+export interface SessionPullRequestV2 {
+  cursor?: number | null;
+  limit?: number;
+  maxBytes?: number;
+}
+
+export interface SessionPullResponseV2 {
+  changes: SessionDelta[];
+  nextCursor: number;
+  hasMore: boolean;
+}
+
+export interface SessionPushRequestV2 {
+  sessions: SessionChange[];
+  usageEvents?: UsageEventChange[];
+}
+
+export interface SessionPushResponseV2 {
+  sessions: MergedSession[];
+  conflicts: ConflictRecord[];
+  acceptedUsageEvents: number;
 }
 
 /** 会话快照（pull 返回的完整内容） */
@@ -191,6 +244,14 @@ export interface DeviceInfo {
   extensionVersion: string;
   lastSeen: number;
   createdAt: number;
+  status: "active" | "legacy" | "merged";
+  mergedInto: string | null;
+  mergedAt: number | null;
+  isLegacy: boolean;
+  sessionCount: number;
+  entryCount: number;
+  totalTokens: number;
+  totalCost: number;
 }
 
 export interface HeartbeatRequest {
@@ -225,4 +286,4 @@ export interface ApiErrorBody {
 }
 
 /** 会话 token 版本常量 */
-export const SYNC_PROTOCOL_VERSION = 1;
+export const SYNC_PROTOCOL_VERSION = 2;

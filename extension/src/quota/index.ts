@@ -3,16 +3,17 @@
  * 输出用于 TUI 面板 / 纯文本 / JSON 的展示数据。
  */
 import type { QuotaProbeResult, QuotaReport, QuotaSnapshot } from "./types.js";
-import { probeDeepSeek, probeZai, probeCodex, type FetchLike } from "./providers.js";
+import { probeDeepSeek, probeZai, probeCodex, readQuotaCredentials, type FetchLike } from "./providers.js";
 import { recordSnapshot, toSnapshot, latestSnapshot, computeDeltas } from "./history.js";
 
 /** 并发探测全部渠道（Codex 失败不抛错） */
 export async function probeAllQuotas(fetchImpl?: FetchLike): Promise<QuotaReport> {
   const ts = Date.now();
+  const credentials = readQuotaCredentials();
   const settled = await Promise.allSettled([
-    probeDeepSeek(fetchImpl),
-    probeZai(fetchImpl),
-    probeCodex(fetchImpl),
+    probeDeepSeek(fetchImpl, credentials),
+    probeZai(fetchImpl, credentials),
+    probeCodex(fetchImpl, credentials),
   ]);
   const providers: QuotaProbeResult[] = settled.map((s, i) => {
     if (s.status === "fulfilled") return s.value;

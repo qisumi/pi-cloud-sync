@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentDir } from "../config.js";
 
@@ -60,7 +61,8 @@ function usageKey(input: UsageInput): string {
 /** 实时采集器：追加写入 + 内存去重 */
 export class UsageCollector {
   private seen = new Set<string>();
-  private dirty = false;
+  private records: UsageRecord[] = [];
+  private writeQueue: Promise<void> = Promise.resolve();
   private filePath = statsFilePath();
 
   constructor() {
@@ -71,6 +73,7 @@ export class UsageCollector {
           try {
             const rec = JSON.parse(line) as UsageRecord;
             this.seen.add(rec.key);
+            this.records.push(rec);
           } catch {
             // ignore
           }
@@ -106,10 +109,11 @@ export class UsageCollector {
       device: input.device ?? "",
       source: "live",
     };
-    this.dirty = true;
+    this.records.push(rec);
     try {
       mkdirSync(agentDir(), { recursive: true });
-      writeFileSync(this.filePath, JSON.stringify(rec) + "\n", { flag: "a" });
+      const line = JSON.stringify(rec) + "\n";
+      this.writeQueue = this.writeQueue.then(() => appendFile(this.filePath, line, "utf8")).catch(() => undefined);
     } catch {
       // 写失败不阻塞主流程
     }
@@ -118,22 +122,7 @@ export class UsageCollector {
 
   /** 读取全部实时记录 */
   loadAll(): UsageRecord[] {
-    const out: UsageRecord[] = [];
-    try {
-      if (existsSync(this.filePath)) {
-        for (const line of readFileSync(this.filePath, "utf8").split("\n")) {
-          if (!line.trim()) continue;
-          try {
-            out.push(JSON.parse(line) as UsageRecord);
-          } catch {
-            // ignore
-          }
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return out;
+    return this.records.slice();
   }
 
   hasAnyForSession(sessionId: string): boolean {

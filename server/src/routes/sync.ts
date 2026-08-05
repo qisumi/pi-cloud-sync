@@ -2,14 +2,16 @@ import type { FastifyInstance } from "fastify";
 import type { FastifyRequest } from "fastify";
 import type { SyncDb } from "../db.js";
 import { mergeObject } from "../merge.js";
-import { mergeSession, pullSessions, restoreSession } from "../sessions.js";
+import { mergeSession, mergeUsageEvents, pullSessionDeltas, pullSessions, restoreSession } from "../sessions.js";
 import type {
   ConflictRecord,
   MergedObject,
   MergedSession,
   PullRequest,
   PushChange,
+  SessionPullRequestV2,
   SessionChange,
+  SessionPushRequestV2,
 } from "@pi-cloud-sync/shared";
 import type { ServerConfig } from "../config.js";
 
@@ -41,8 +43,9 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
     const objects: MergedObject[] = [];
     const conflicts: ConflictRecord[] = [];
     const insertConflicts = dbs.db.prepare(
-      `INSERT INTO conflicts (object_key, path, kind, device_a, device_b, content_a, content_b, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO conflicts
+         (object_key, path, kind, device_a, device_b, device_a_id, content_a, content_b, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     const tx = dbs.db.transaction(() => {
@@ -52,6 +55,21 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
           continue; // 单对象过大，跳过
         }
         const result = mergeObject(dbs, change, device);
+        dbs.db
+          .prepare(`UPDATE objects SET updated_by_device_id = ? WHERE key = ? AND updated_by = ?`)
+          .run(device.deviceId, change.key, device.name);
+        dbs.db
+          .prepare(
+            `UPDATE config_field_versions SET updated_by_device_id = ?
+             WHERE object_key = ? AND updated_by = ?`,
+          )
+          .run(device.deviceId, change.key, device.name);
+        dbs.db
+          .prepare(
+            `UPDATE conflicts SET device_a_id = ?
+             WHERE object_key = ? AND device_a = ? AND device_a_id = ''`,
+          )
+          .run(device.deviceId, change.key, device.name);
         objects.push(result.merged);
         for (const c of result.conflicts) {
           insertConflicts.run(
@@ -60,6 +78,7 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
             c.kind,
             c.deviceA,
             c.deviceB,
+            device.deviceId,
             c.contentA,
             c.contentB,
             now(),
@@ -185,7 +204,13 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
           s.entries = s.entries.slice(0, room);
         }
         const r = mergeSession(dbs, s, device);
-        results.push(r.merged);
+        // v1 兼容旧插件；v2 明确不再返回会随历史增长的 entryIds。
+        const entryIds = (
+          dbs.db.prepare(`SELECT entry_id FROM session_entries WHERE session_uuid = ? ORDER BY sort_seq`).all(s.uuid) as Array<{
+            entry_id: string;
+          }>
+        ).map((row) => row.entry_id);
+        results.push({ ...r.merged, entryIds } as MergedSession);
         if (r.conflicts > 0) {
           conflicts.push({
             id: 0,
@@ -214,12 +239,68 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
     return { ok: true, data: { sessions: pullSessions(dbs, since) } };
   });
 
+  /* ---------- v2 会话推送：严格分块，不返回历史 entryId ---------- */
+  app.post<{ Body: SessionPushRequestV2 }>("/api/v2/sessions/push", async (req, reply) => {
+    const sessions = Array.isArray(req.body?.sessions) ? req.body.sessions : [];
+    const usageEvents = Array.isArray(req.body?.usageEvents) ? req.body.usageEvents : [];
+    if (sessions.length === 0 && usageEvents.length === 0) {
+      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "empty push" });
+    }
+    if (sessions.length > MAX_SESSIONS_PER_PUSH) {
+      return reply.code(413).send({ ok: false, error: "BAD_REQUEST", message: "too many sessions" });
+    }
+    const entryCount = sessions.reduce((sum, session) => sum + (Array.isArray(session.entries) ? session.entries.length : 0), 0);
+    if (entryCount > cfg.maxBatchEntries || Buffer.byteLength(JSON.stringify(req.body), "utf8") > 8 * 1024 * 1024) {
+      return reply.code(413).send({ ok: false, error: "BAD_REQUEST", message: "session batch too large" });
+    }
+    const device = resolveDevice(dbs, headerValue(req, "x-device-id"), headerValue(req, "x-device-name"));
+    if (!device) {
+      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "heartbeat required" });
+    }
+    const results: MergedSession[] = [];
+    const conflicts: ConflictRecord[] = [];
+    let acceptedUsageEvents = 0;
+    const tx = dbs.db.transaction(() => {
+      for (const session of sessions) {
+        const result = mergeSession(dbs, session, device);
+        results.push(result.merged);
+        if (result.conflicts > 0) {
+          conflicts.push({
+            id: 0,
+            objectKey: `session/${session.uuid}`,
+            path: "(entry conflict)",
+            kind: "session-entry",
+            deviceA: device.name,
+            deviceB: device.name,
+            contentA: "",
+            contentB: "",
+            resolution: null,
+            resolvedAt: null,
+            createdAt: now(),
+          });
+        }
+      }
+      acceptedUsageEvents = mergeUsageEvents(dbs, usageEvents, device);
+    });
+    tx();
+    return { ok: true, data: { sessions: results, conflicts, acceptedUsageEvents } };
+  });
+
+  /* ---------- v2 会话拉取：单调游标 + 响应大小上限 ---------- */
+  app.post<{ Body: SessionPullRequestV2 }>("/api/v2/sessions/pull", async (req) => {
+    const cursor = Math.max(0, Number(req.body?.cursor ?? 0) || 0);
+    return {
+      ok: true,
+      data: pullSessionDeltas(dbs, cursor, Number(req.body?.limit ?? 500), Number(req.body?.maxBytes ?? 2 * 1024 * 1024)),
+    };
+  });
+
   /* ---------- 会话恢复（撤销删除） ---------- */
   app.post<{ Body: { uuid: string } }>("/api/v1/sessions/restore", async (req, reply) => {
     const uuid = req.body?.uuid;
     if (!uuid) return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "uuid required" });
     const device = resolveDevice(dbs, headerValue(req, "x-device-id"), headerValue(req, "x-device-name"));
-    const ok = restoreSession(dbs, uuid, device?.name ?? "unknown");
+    const ok = restoreSession(dbs, uuid, device ?? { deviceId: "", name: "unknown" });
     return { ok, data: { restored: ok } };
   });
 }
@@ -233,7 +314,7 @@ function resolveDevice(
   const row = dbs.db.prepare("SELECT device_id, name FROM devices WHERE device_id = ?").get(deviceId) as
     | { device_id: string; name: string }
     | undefined;
-  if (row) return { deviceId: row.device_id, name: deviceName || row.name || "unknown" };
+  if (row) return { deviceId: row.device_id, name: row.name || deviceName || "unknown" };
   // 宽容处理：未注册设备自动注册（首包场景）
   dbs.db
     .prepare(
