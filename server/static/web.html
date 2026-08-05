@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-cloud-sync · Sessions</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a22; --border: #262c38;
+    --text: #d7dce4; --muted: #7d8798; --accent: #4cc2ff; --accent-dim: #2b6b8f;
+    --user: #1e2a3a; --assistant: #18202c; --tool: #232a36; --err: #ff6b6b;
+    --ok: #4ade80; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; font-weight: 600; }
+  .muted { color: var(--muted); }
+  input, button { background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent-dim); }
+  button.primary { background: var(--accent-dim); border-color: var(--accent-dim); }
+  .container { max-width: 1100px; margin: 0 auto; padding: 16px 24px 80px; }
+  .searchbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .searchbar input { flex: 1; min-width: 200px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; background: #13161d; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #1b212d; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; background: var(--accent-dim); color: #cfeaff; }
+  .badge.deleted { background: #3a2226; color: var(--err); }
+  .badge.ok { background: #16331f; color: var(--ok); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  .back { margin-bottom: 14px; }
+  /* 会话详情 */
+  .sess-head { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px; }
+  .sess-head h2 { font-size: 15px; margin-bottom: 4px; }
+  .msg { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+  .msg-head { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; font-size: 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .msg.role-user .msg-head { background: var(--user); }
+  .msg.role-assistant .msg-head { background: var(--assistant); }
+  .msg.role-toolResult .msg-head, .msg.type-tool .msg-head { background: var(--tool); }
+  .msg-body { padding: 10px 14px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+  .msg.role-assistant .msg-body { color: #dbe2ec; }
+  .msg.type-compaction, .msg.type-branch_summary { border-left: 3px solid var(--warn); }
+  .msg.type-compaction .msg-body, .msg.type-branch_summary .msg-body { color: var(--muted); font-style: italic; }
+  .role-tag { font-weight: 600; }
+  .role-user .role-tag { color: var(--accent); }
+  .role-assistant .role-tag { color: var(--ok); }
+  .role-toolResult .role-tag { color: var(--warn); }
+  .meta { color: var(--muted); margin-left: auto; text-align: right; }
+  .usage { color: var(--muted); font-size: 11px; }
+  .err { color: var(--err); padding: 8px 0; }
+  .pager { display: flex; gap: 8px; margin-top: 12px; justify-content: center; }
+  .token-prompt { max-width: 420px; margin: 80px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 24px; text-align: center; }
+  .token-prompt h2 { margin-bottom: 8px; font-size: 15px; }
+  .token-prompt input { width: 100%; margin: 12px 0; }
+  .hidden { display: none; }
+  .footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>pi-cloud-sync · Sessions</h1>
+  <span class="muted" id="serverLabel"></span>
+  <button id="btnLogout" class="hidden" style="margin-left:auto">切换令牌</button>
+</header>
+
+<div class="container">
+  <!-- 令牌输入 -->
+  <div id="tokenPrompt" class="token-prompt">
+    <h2>输入访问令牌</h2>
+    <p class="muted">Token 只保存在本浏览器 localStorage，不会上传到别处。</p>
+    <input type="password" id="tokenInput" placeholder="访问令牌 (SYNC_TOKEN)">
+    <button class="primary" id="btnToken" style="width:100%">连接</button>
+  </div>
+
+  <!-- 列表视图 -->
+  <div id="listView" class="hidden">
+    <div class="searchbar">
+      <input id="searchInput" placeholder="搜索名称 / 路径 / uuid…">
+      <label class="muted" style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="showDeleted" style="width:auto"> 显示已删除
+      </label>
+    </div>
+    <table>
+      <thead><tr><th>会话</th><th>项目路径</th><th>消息数</th><th>最后更新</th><th>来源设备</th></tr></thead>
+      <tbody id="sessBody"></tbody>
+    </table>
+    <div id="listEmpty" class="empty hidden">暂无会话</div>
+  </div>
+
+  <!-- 详情视图 -->
+  <div id="detailView" class="hidden">
+    <button class="back" id="btnBack">← 返回列表</button>
+    <div id="sessHead" class="sess-head"></div>
+    <div id="msgList"></div>
+    <div class="pager" id="pager"></div>
+  </div>
+</div>
+<div class="footer">pi-cloud-sync web dashboard · 会话仅显示在服务器上的同步副本</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  let token = localStorage.getItem('pisync_token') || '';
+  let sessions = [];
+  let curUuid = null, curOffset = 0, curTotal = 0;
+  const PAGE = 500;
+
+  const serverOrigin = location.origin;
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function fmtTime(ts) {
+    if (!ts) return '-';
+    const d = new Date(ts);
+    return d.toLocaleString();
+  }
+  async function api(path) {
+    const res = await fetch(serverOrigin + path, { headers: { 'Authorization': 'Bearer ' + token } });
+    const j = await res.json().catch(() => ({ ok: false, message: 'HTTP ' + res.status }));
+    if (!res.ok || !j.ok) { const e = new Error(j.message || j.error || 'HTTP ' + res.status); e.status = res.status; throw e; }
+    return j.data;
+  }
+
+  function init() {
+    $('serverLabel').textContent = '· ' + serverOrigin;
+    if (token) { connect(); } else { showTokenPrompt(); }
+  }
+
+  function showTokenPrompt() { $('tokenPrompt').classList.remove('hidden'); $('listView').classList.add('hidden'); $('detailView').classList.add('hidden'); $('btnLogout').classList.add('hidden'); }
+  function showList() { $('tokenPrompt').classList.add('hidden'); $('listView').classList.remove('hidden'); $('detailView').classList.add('hidden'); $('btnLogout').classList.remove('hidden'); }
+
+  async function connect() {
+    try {
+      await api('/api/v1/health');
+      localStorage.setItem('pisync_token', token);
+      showList();
+      await loadSessions();
+    } catch (e) {
+      localStorage.removeItem('pisync_token');
+      $('tokenPrompt').querySelector('h2').textContent = e.status === 401 ? '令牌无效，请重新输入' : '连接失败：' + e.message;
+      showTokenPrompt();
+    }
+  }
+
+  async function loadSessions() {
+    sessions = await api('/api/v1/web/sessions');
+    renderList();
+  }
+
+  function renderList() {
+    const q = $('searchInput').value.trim().toLowerCase();
+    const showDel = $('showDeleted').checked;
+    const rows = sessions.filter(s => {
+      if (!showDel && s.deleted) return false;
+      if (!q) return true;
+      return (s.name || '').toLowerCase().includes(q) || s.cwd.toLowerCase().includes(q) || s.uuid.toLowerCase().includes(q);
+    });
+    const body = $('sessBody');
+    body.innerHTML = '';
+    $('listEmpty').classList.toggle('hidden', rows.length > 0);
+    for (const s of rows) {
+      const tr = document.createElement('tr');
+      tr.className = 'clickable';
+      const name = s.name || s.uuid.slice(0, 8);
+      tr.innerHTML = `
+        <td><strong>${esc(name)}</strong>${s.deleted ? ' <span class="badge deleted">已删除</span>' : ''}
+          <div class="muted" style="font-size:11px">${esc(s.uuid)}</div></td>
+        <td class="muted">${esc(s.cwd)}</td>
+        <td>${s.entryCount}</td>
+        <td class="muted">${fmtTime(s.updatedAt)}</td>
+        <td class="muted">${esc(s.updatedBy)}</td>`;
+      tr.onclick = () => openSession(s.uuid);
+      body.appendChild(tr);
+    }
+  }
+
+  async function openSession(uuid) {
+    curUuid = uuid; curOffset = 0;
+    showDetail();
+    await loadDetail();
+  }
+
+  function showDetail() { $('tokenPrompt').classList.add('hidden'); $('listView').classList.add('hidden'); $('detailView').classList.remove('hidden'); $('btnLogout').classList.remove('hidden'); }
+
+  async function loadDetail() {
+    const d = await api(`/api/v1/web/sessions/${curUuid}?limit=${PAGE}&offset=${curOffset}`);
+    curTotal = d.total;
+    const name = d.name || d.uuid.slice(0, 8);
+    $('sessHead').innerHTML = `
+      <h2>${esc(name)} ${d.deleted ? '<span class="badge deleted">已删除</span>' : ''}</h2>
+      <div class="muted">${esc(d.uuid)} · ${esc(d.cwd)}</div>
+      <div class="muted">共 ${d.total} 条 · 更新于 ${fmtTime(d.updatedAt)} · 来源 ${esc(d.updatedBy)}</div>`;
+    const list = $('msgList');
+    list.innerHTML = '';
+    if (d.entries.length === 0) { list.innerHTML = '<div class="empty">该会话暂无条目</div>'; }
+    for (const e of d.entries) {
+      const cls = e.role ? 'role-' + e.role : 'type-' + e.type;
+      const roleTag = e.role ? e.role : e.type;
+      const model = e.model ? esc(e.model) : '';
+      const usage = e.usage && (e.usage.totalTokens > 0 || e.usage.cost > 0)
+        ? ` · <span class="usage">${e.usage.totalTokens.toLocaleString()} tok · $${Number(e.usage.cost).toFixed(4)}</span>` : '';
+      const tool = e.toolName ? ` · ${esc(e.toolName)}` : '';
+      const time = e.ts ? fmtTime(e.ts) : '';
+      const div = document.createElement('div');
+      div.className = 'msg ' + cls;
+      div.innerHTML = `
+        <div class="msg-head">
+          <span class="role-tag">${esc(roleTag)}</span>
+          <span class="muted">${model}${tool}${usage}</span>
+          <span class="meta">${time}</span>
+        </div>
+        <div class="msg-body">${e.text ? esc(e.text) : (e.summary ? esc(e.summary) : '')}</div>`;
+      list.appendChild(div);
+    }
+    const pager = $('pager');
+    pager.innerHTML = '';
+    if (curOffset > 0) { const b = document.createElement('button'); b.textContent = '← 上一页'; b.onclick = () => { curOffset = Math.max(0, curOffset - PAGE); loadDetail(); window.scrollTo(0,0); }; pager.appendChild(b); }
+    if (curOffset + PAGE < curTotal) { const b = document.createElement('button'); b.textContent = '下一页 →'; b.onclick = () => { curOffset += PAGE; loadDetail(); window.scrollTo(0,0); }; pager.appendChild(b); }
+  }
+
+  $('btnToken').onclick = () => { token = $('tokenInput').value.trim(); if (token) connect(); };
+  $('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') { token = $('tokenInput').value.trim(); if (token) connect(); } });
+  $('btnLogout').onclick = () => { localStorage.removeItem('pisync_token'); token = ''; $('tokenInput').value = ''; showTokenPrompt(); };
+  $('btnBack').onclick = () => { showList(); renderList(); };
+  $('searchInput').addEventListener('input', renderList);
+  $('showDeleted').addEventListener('change', renderList);
+
+  init();
+})();
+</script>
+</body>
+</html>

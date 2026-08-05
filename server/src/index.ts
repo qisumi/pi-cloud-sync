@@ -1,5 +1,7 @@
 import Fastify from "fastify";
-import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { SyncDb } from "./db.js";
 import { loadConfig } from "./config.js";
 import { verifyToken, verifyAdminToken, type TokenRecord } from "./auth.js";
@@ -8,6 +10,7 @@ import { registerSyncRoutes } from "./routes/sync.js";
 import { registerConflictRoutes } from "./routes/conflicts.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerAdminRoutes } from "./routes/admin.js";
+import { registerWebRoutes } from "./routes/web.js";
 
 export async function startServer(cfg = loadConfig()) {
   const app = Fastify({
@@ -45,15 +48,37 @@ export async function startServer(cfg = loadConfig()) {
   app.get("/", async () => ({
     name: "pi-cloud-sync server",
     health: "/api/v1/health",
+    dashboard: "/web",
     docs: "see docs/protocol.md",
     time: Date.now(),
   }));
+
+  // 网页看板（静态页面）
+  let webHtml = "";
+  try {
+    const moduleDir = fileURLToPath(new URL(".", import.meta.url));
+    webHtml = readFileSync(join(moduleDir, "..", "static", "web.html"), "utf8");
+  } catch {
+    try {
+      webHtml = readFileSync(join(process.cwd(), "static", "web.html"), "utf8");
+    } catch {
+      // ignore
+    }
+  }
+  app.get("/web", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    if (!webHtml) {
+      return reply.code(404).send("web.html not found — rebuild the server");
+    }
+    return reply.send(webHtml);
+  });
 
   registerHealthRoute(app, dbs, startedAt);
   registerDeviceRoutes(app, dbs);
   registerSyncRoutes(app, dbs, cfg);
   registerConflictRoutes(app, dbs);
   registerAdminRoutes(app, dbs);
+  registerWebRoutes(app, dbs);
 
   await app.listen({ host: cfg.host, port: cfg.port });
   app.log.info(

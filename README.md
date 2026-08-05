@@ -130,6 +130,16 @@ pi -e ./extension/src/index.ts
 /sync restore <uuid>  # 恢复已删除会话 restore deleted session
 ```
 
+### 5. Web dashboard / 网页看板
+
+部署好服务器后，浏览器访问 `https://<你的域名>/web`，输入访问令牌即可查看：
+
+- 全部同步会话列表（名称 / 项目路径 / 消息数 / 来源设备 / 更新时间）
+- 会话对话内容（用户 / 助手 / 工具调用，含模型与 token/费用）
+- 搜索、已删除会话标记、分页浏览
+
+令牌只保存在浏览器 localStorage，数据全部走服务器 API。
+
 ---
 
 ## 🧠 Conflict Resolution / 冲突处理

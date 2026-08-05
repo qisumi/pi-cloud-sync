@@ -14,6 +14,7 @@ ENV NODE_ENV=production
 COPY --from=build /app/server/package.json ./package.json
 COPY --from=build /app/server/node_modules ./node_modules
 COPY --from=build /app/server/dist ./dist
+COPY --from=build /app/server/static ./static
 COPY --from=build /app/shared ./shared
 VOLUME ["/app/data"]
 EXPOSE 8787
