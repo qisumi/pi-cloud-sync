@@ -11,6 +11,7 @@ import { registerConflictRoutes } from "./routes/conflicts.js";
 import { registerDeviceRoutes } from "./routes/devices.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerWebRoutes } from "./routes/web.js";
+import { registerStatsRoutes } from "./routes/stats.js";
 
 export async function startServer(cfg = loadConfig()) {
   const app = Fastify({
@@ -79,6 +80,7 @@ export async function startServer(cfg = loadConfig()) {
   registerConflictRoutes(app, dbs);
   registerAdminRoutes(app, dbs);
   registerWebRoutes(app, dbs);
+  registerStatsRoutes(app, dbs);
 
   await app.listen({ host: cfg.host, port: cfg.port });
   app.log.info(

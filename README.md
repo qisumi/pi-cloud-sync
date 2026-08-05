@@ -172,6 +172,42 @@ pi -e ./extension/src/index.ts
 /usage live           # 开关实时采集
 ```
 
+---
+
+## 🎚️ Quota Probe / 额度探测
+
+实时探测各 AI 渠道的剩余额度，TUI 模式弹出简洁面板（进度条 + 剩余百分比 + 重置时间 +
+与上次探测的消耗对比）。快照记录在本地 `~/.pi/agent/pi-quota.jsonl`。
+
+```bash
+/quota               # 探测全部渠道（TUI 面板展示）
+/quota --json        # 输出 JSON（供脚本/自动化）
+```
+
+支持渠道与凭据来源：
+
+| 渠道 | 探测内容 | 凭据来源 | 说明 |
+| --- | --- | --- | --- |
+| **DeepSeek** | 账户余额（金额 ¥/$） | `~/.pi/agent/auth.json` 的 `deepseek`，或 `DEEPSEEK_API_KEY` | 官方 `GET /user/balance` |
+| **Z.AI 智谱 GLM Coding Plan** | 5 小时额度 + 周额度（tokens） | auth.json 的 `zai` / `zai-coding-cn` / `z-ai` / `zhipu` / `glm` 等（默认优先），或 `ZAI_CODING_CN_API_KEY` / `ZAI_API_KEY` / `ZHIPU_API_KEY` / `GLM_API_KEY` | 中国区 `open.bigmodel.cn`，全球区可用 `ZAI_BASE_URL` 覆盖 |
+| **Codex（OpenAI 订阅）** | 5 小时 + 周额度（% + 重置时间） | `~/.codex/auth.json`（`codex login` 生成） | 访问 ChatGPT 失败（如无 VPN）时**仅标记不可用，不影响其他渠道** |
+
+> 额度面板示例（TUI）：
+>
+> ```
+> 额度探测 Quota
+>  DeepSeek
+>   账户余额     ● ¥65.96  余额
+>  Z.AI GLM 编程套餐
+>   5 小时额度  ████████░░ 剩 60% (3.2M/8M) · 1 小时 20 分后重置
+>   周额度      ██████████ 剩 38% · 3 天 2 小时后重置
+>  Codex (OpenAI 订阅)
+>   周额度      ████░░░░░░ 剩 45% · 8月6日 12:00 重置
+>  对比上次: DeepSeek 消耗 1.70 · Z.AI 5h +5%
+> ```
+
+---
+
 ```
 ═══ 用量统计 Usage Report ═══
 总 Token: 1.2M  (输入 800.0k / 输出 350.0k / 缓存读 50.0k / 缓存写 10.0k)

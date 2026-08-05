@@ -14,7 +14,8 @@ import { searchLocalSessions, localSessionsIndex } from "./sync/sessions.js";
 import { UsageCollector } from "./stats/collector.js";
 import { scanAllSessions, mergeRecords, buildReport } from "./stats/analyzer.js";
 import { formatReport, formatSessionSummary } from "./stats/report.js";
-import { output } from "./ui.js";
+import { output, startProgress, quotaDialog } from "./ui.js";
+import { probeAllQuotas, formatQuotaText, quotaSummary } from "./quota/index.js";
 import { writeFileSync } from "node:fs";
 
 const EXT_VERSION = "0.1.0";
@@ -46,33 +47,46 @@ function fmtPulled(r: { pulled: { objects: number; sessions: number; entries: nu
 async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<string> {
   const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 
-  if (!sub || sub === "status") return syncStatus();
+  if (!sub || sub === "status") return syncStatus(ctx);
 
   if (sub === "push") {
     if (!serverConfigured()) return "服务器未配置：运行 /sync config";
+    const progress = startProgress(ctx, "正在推送变更到服务器…");
     const c = client();
-    const report = await push(cfg, loadState(), c, "0.83.0", EXT_VERSION);
-    if (report.errors.length > 0) return `推送完成（部分失败）\n${report.errors.join("\n")}`;
+    const report = await push(cfg, loadState(), c, "0.83.0", EXT_VERSION, (m) => progress?.set(m));
+    if (report.errors.length > 0) {
+      progress?.error(`推送失败：${report.errors[0]}`);
+      return `推送完成（部分失败）\n${report.errors.join("\n")}`;
+    }
+    progress?.done();
     return `推送完成: ${fmtPushed(report)}${report.conflicts ? `, ${report.conflicts} 个冲突` : ""}`;
   }
 
   if (sub === "pull") {
     if (!serverConfigured()) return "服务器未配置：运行 /sync config";
+    const progress = startProgress(ctx, "正在从服务器拉取变更…");
     const c = client();
     const report = await pull(cfg, loadState(), c, {
       skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
       piExec: (args) => piExec(args),
+      onStage: (m) => progress?.set(m),
     });
-    if (report.errors.length > 0) return `拉取完成（部分失败）\n${report.errors.join("\n")}`;
+    if (report.errors.length > 0) {
+      progress?.error(`拉取失败：${report.errors[0]}`);
+      return `拉取完成（部分失败）\n${report.errors.join("\n")}`;
+    }
+    progress?.done();
     return `拉取完成: ${fmtPulled(report)}${report.conflicts ? `, ${report.conflicts} 个冲突` : ""}`;
   }
 
   if (sub === "now") {
     if (!serverConfigured()) return "服务器未配置：运行 /sync config";
+    const progress = startProgress(ctx, "正在同步（先拉后推）…");
     const c = client();
     const { pullReport, pushReport } = await syncNow(cfg, c, "0.83.0", EXT_VERSION, {
       skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
       piExec: (args) => piExec(args),
+      onStage: (m) => progress?.set(m),
     });
     const errs = [...pullReport.errors, ...pushReport.errors];
     const lines = [
@@ -80,7 +94,12 @@ async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<stri
       `推送: ${fmtPushed(pushReport)}`,
       `冲突: ${pullReport.conflicts + pushReport.conflicts}`,
     ];
-    if (errs.length > 0) lines.push("错误: " + errs.join("; "));
+    if (errs.length > 0) {
+      progress?.error(`同步失败：${errs[0]}`);
+      lines.push("错误: " + errs.join("; "));
+    } else {
+      progress?.done();
+    }
     return lines.join("\n");
   }
 
@@ -90,16 +109,24 @@ async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<stri
       const id = parseInt(rest[1] ?? "", 10);
       const how = (rest[2] ?? "keep-b") as "keep-a" | "keep-b";
       if (Number.isNaN(id)) return "用法: /sync conflicts resolve <id> keep-a|keep-b";
+      const progress = startProgress(ctx, `正在解决冲突 #${id}…`);
       try {
         await resolveConflict(cfg, client(), id, how);
+        progress?.done();
         return `冲突 #${id} 已解决（${how}），已重新拉取。`;
       } catch (err) {
+        progress?.error(`解决失败：${(err as Error).message}`);
         return `解决失败: ${(err as Error).message}`;
       }
     }
+    const progress = startProgress(ctx, "正在获取冲突列表…");
     try {
       const conflicts = await client().listConflicts();
-      if (conflicts.length === 0) return "没有冲突记录 🎉";
+      if (conflicts.length === 0) {
+        progress?.done();
+        return "没有冲突记录 🎉";
+      }
+      progress?.done();
       return (
         `共 ${conflicts.length} 个冲突（未解决 ${conflicts.filter((c) => !c.resolvedAt).length}）:\n` +
         conflicts
@@ -113,14 +140,20 @@ async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<stri
         "\n解决: /sync conflicts resolve <id> keep-a|keep-b"
       );
     } catch (err) {
+      progress?.error(`获取冲突失败：${(err as Error).message}`);
       return `获取冲突失败: ${(err as Error).message}`;
     }
   }
 
   if (sub === "devices") {
+    const progress = startProgress(ctx, "正在获取设备列表…");
     try {
       const devices = await client().listDevices();
-      if (devices.length === 0) return "暂无设备记录";
+      if (devices.length === 0) {
+        progress?.done();
+        return "暂无设备记录";
+      }
+      progress?.done();
       return devices
         .map(
           (d) =>
@@ -128,6 +161,7 @@ async function cmdSync(args: string, ctx: ExtensionCommandContext): Promise<stri
         )
         .join("\n");
     } catch (err) {
+      progress?.error(`获取设备列表失败：${(err as Error).message}`);
       return `获取设备列表失败: ${(err as Error).message}`;
     }
   }
@@ -182,7 +216,7 @@ function preview(s: string, max = 80): string {
   return clean.length > max ? clean.slice(0, max) + "…" : clean;
 }
 
-async function syncStatus(): Promise<string> {
+async function syncStatus(ctx: ExtensionCommandContext): Promise<string> {
   const state = loadState();
   const lines = [
     "═══ pi-cloud-sync 状态 ═══",
@@ -202,12 +236,15 @@ async function syncStatus(): Promise<string> {
     `统计采集: ${cfg.stats.collect ? "开" : "关"}`,
   ];
   if (serverConfigured()) {
+    const progress = startProgress(ctx, "正在获取服务器状态…");
     try {
       const health = await client().health();
       lines.push(`服务器状态: healthy (${health.version}, 协议 v1)`);
       const conflicts = await client().listConflicts();
       lines.push(`未解决冲突: ${conflicts.filter((c) => !c.resolvedAt).length}`);
+      progress?.done();
     } catch (err) {
+      progress?.error(`服务器不可达：${(err as Error).message}`);
       lines.push(`服务器状态: 不可达 (${(err as Error).message})`);
     }
   } else {
@@ -327,12 +364,15 @@ async function cmdUsage(args: string, ctx: ExtensionCommandContext): Promise<str
 
   const state = loadState();
   const deviceId = state.deviceId ?? ensureDeviceId();
+  const progress = startProgress(ctx, "正在扫描会话并统计用量…");
   const live = cfg.stats.collect ? collector.loadAll() : [];
   const scanned = scanAllSessions(deviceId);
   const records = mergeRecords(live, scanned);
 
   const sessionId = currentSession ? ctx.sessionManager.getSessionId() : null;
   const report = buildReport(records, { days, groupBySessionTop: top, sessionId });
+
+  progress?.done();
 
   if (currentSession) {
     return formatSessionSummary(ctx.sessionManager.getSessionId() ?? "session", report);
@@ -362,6 +402,32 @@ function toggleLive(ctx: ExtensionCommandContext): string {
 async function piExec(args: string[]): Promise<void> {
   if (!piApi) throw new Error("extension not initialized");
   await piApi.exec("pi", args, { timeout: 120_000 });
+}
+
+/* ============================ /quota 命令 ============================ */
+
+async function cmdQuota(args: string, ctx: ExtensionCommandContext): Promise<string> {
+  const json = args.includes("--json");
+  const progress = startProgress(ctx, "正在探测额度（DeepSeek / Z.AI / Codex）…");
+  let report;
+  try {
+    report = await probeAllQuotas();
+  } catch (err) {
+    progress?.error(`额度探测失败：${(err as Error).message}`);
+    return `额度探测失败: ${(err as Error).message}`;
+  }
+
+  if (json) {
+    progress?.done();
+    return JSON.stringify(report, null, 2);
+  }
+
+  progress?.done();
+  if (ctx.hasUI && ctx.mode === "tui") {
+    await quotaDialog(ctx, report);
+    return `额度探测完成 · ${quotaSummary(report)}`;
+  }
+  return formatQuotaText(report);
 }
 
 /* ============================ 事件 ============================ */
@@ -471,6 +537,14 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const result = await cmdUsage(args ?? "", ctx);
       await output(ctx, result, "usage");
+    },
+  });
+
+  pi.registerCommand("quota", {
+    description: "额度探测：DeepSeek 余额 / Z.AI 5h 额度 / Codex 周额度 [--json]",
+    handler: async (args, ctx) => {
+      const result = await cmdQuota(args ?? "", ctx);
+      await output(ctx, result, "quota");
     },
   });
 

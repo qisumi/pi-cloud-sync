@@ -54,6 +54,7 @@ export async function push(
   client: SyncClient,
   piVersion: string,
   extVersion: string,
+  onStage?: (msg: string) => void,
 ): Promise<SyncReport> {
   const report: SyncReport = {
     pushed: { configs: 0, sessions: 0, entries: 0, extensions: 0, manifest: false },
@@ -64,6 +65,7 @@ export async function push(
   };
 
   try {
+    onStage?.("正在连接服务器…");
     await heartbeat(cfg, state, client, piVersion, extVersion);
   } catch (err) {
     report.errors.push((err as Error).message);
@@ -86,6 +88,7 @@ export async function push(
   }
 
   if (changes.length > 0) {
+    onStage?.("正在上传配置与扩展…");
     try {
       const res = await client.pushObjects(changes);
       for (const merged of res.objects) {
@@ -127,6 +130,7 @@ export async function push(
   }
 
   if (cfg.sync.scopes.sessions) {
+    onStage?.("正在上传会话…");
     try {
       const local = scanLocalSessions();
       const sessionChanges = buildSessionChanges(local, state, cfg);
@@ -156,7 +160,7 @@ export async function pull(
   cfg: SyncConfig,
   state: SyncState,
   client: SyncClient,
-  opts: { skipFile?: string; installPackages?: boolean; piExec?: (args: string[]) => Promise<void> } = {},
+  opts: { skipFile?: string; installPackages?: boolean; piExec?: (args: string[]) => Promise<void>; onStage?: (msg: string) => void } = {},
 ): Promise<SyncReport> {
   const report: SyncReport = {
     pushed: { configs: 0, sessions: 0, entries: 0, extensions: 0, manifest: false },
@@ -167,6 +171,7 @@ export async function pull(
   };
 
   try {
+    opts.onStage?.("正在连接服务器…");
     await heartbeat(cfg, state, client, "", "");
   } catch (err) {
     report.errors.push((err as Error).message);
@@ -174,6 +179,7 @@ export async function pull(
   }
 
   try {
+    opts.onStage?.("正在拉取配置与扩展…");
     const res = await client.pull(
       {
         since: state.lastPullAt ?? null,
@@ -209,6 +215,7 @@ export async function pull(
 
     // 会话拉取
     if (cfg.sync.scopes.sessions) {
+      opts.onStage?.("正在应用会话到本地…");
       const written = applyPulledSessions(cfg, state, res.sessions, { skipFile: opts.skipFile });
       report.pulled.sessions += written.wrote;
       report.pulled.entries += res.sessions.reduce((n, s) => n + s.lines.length, 0);
@@ -225,6 +232,7 @@ export async function pull(
         if (opts.piExec) {
           for (const p of toInstall) {
             try {
+              opts.onStage?.(`正在安装包 ${p.source}…`);
               await opts.piExec([p.source]);
             } catch (err) {
               report.errors.push(`install ${p.source} failed: ${(err as Error).message}`);
@@ -248,11 +256,11 @@ export async function syncNow(
   client: SyncClient,
   piVersion: string,
   extVersion: string,
-  opts: { skipFile?: string; piExec?: (args: string[]) => Promise<void> } = {},
+  opts: { skipFile?: string; piExec?: (args: string[]) => Promise<void>; onStage?: (msg: string) => void } = {},
 ): Promise<{ pullReport: SyncReport; pushReport: SyncReport }> {
   const state = loadState();
   const pullReport = await pull(cfg, state, client, opts);
-  const pushReport = await push(cfg, state, client, piVersion, extVersion);
+  const pushReport = await push(cfg, state, client, piVersion, extVersion, opts.onStage);
   return { pullReport, pushReport };
 }
 

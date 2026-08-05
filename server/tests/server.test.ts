@@ -668,3 +668,103 @@ test("pull honors includeSessions flag (server load reduction)", async (t) => {
   const j3 = (await pull3.json()) as { data: { sessions: unknown[] } };
   assert.equal(j3.data.sessions.length, 0);
 });
+
+test("web stats: aggregate usage by day/model/device + filters", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  const usageEntry = (id: string, ts: string, role: string, model: string, usage: unknown) => ({
+    id,
+    parentId: null,
+    lineJson: JSON.stringify({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: ts,
+      message: { role, provider: "test-provider", model, usage },
+    }),
+  });
+  const pushSessions = (deviceName: string, sessions: unknown[]) =>
+    fetch(`${ctx.base}/api/v1/sessions/push`, {
+      method: "POST",
+      headers: headers(ctx, { "x-device-name": deviceName }),
+      body: JSON.stringify({ sessions }),
+    });
+
+  await pushSessions("dev-a", [{
+    uuid: "stats-sess-a",
+    cwd: "/proj-a",
+    baseVersion: 0,
+    entries: [
+      usageEntry("a1", "2025-06-01T10:00:00.000Z", "assistant", "model-x", { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, totalTokens: 165, cost: { total: 0.001 } }),
+      usageEntry("a2", "2025-06-02T10:00:00.000Z", "toolResult", "model-y", { input: 200, output: 100, cacheRead: 20, cacheWrite: 10, totalTokens: 330, cost: { total: 0.01 } }),
+    ],
+    mtime: Date.now(),
+  }]);
+
+  await pushSessions("dev-b", [{
+    uuid: "stats-sess-b",
+    cwd: "/proj-b",
+    baseVersion: 0,
+    entries: [
+      usageEntry("b1", "2025-06-02T12:00:00.000Z", "assistant", "model-x", { input: 50, output: 25, cacheRead: 5, cacheWrite: 0, totalTokens: 80, cost: { total: 0.0005 } }),
+    ],
+    mtime: Date.now(),
+  }]);
+
+  // 聚合（全部客户端）
+  const all = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, {
+    headers: { authorization: "Bearer test-token" },
+  });
+  const allJson = (await all.json()) as {
+    data: {
+      summary: { requests: number; input: number; output: number; totalTokens: number; cost: number; sessions: number; devices: number };
+      byDay: Array<{ date: string; total: number }>;
+      byModel: Array<{ model: string; total: number; cost: number }>;
+      byDevice: Array<{ device: string; total: number }>;
+      devices: string[];
+      models: string[];
+    };
+  };
+  assert.equal(allJson.data.summary.requests, 3);
+  assert.equal(allJson.data.summary.input, 350);
+  assert.equal(allJson.data.summary.output, 175);
+  assert.equal(allJson.data.summary.totalTokens, 575);
+  assert.equal(Math.round(allJson.data.summary.cost * 100000) / 100000, 0.0115);
+  assert.equal(allJson.data.summary.sessions, 2);
+  assert.equal(allJson.data.summary.devices, 2);
+  assert.deepEqual(allJson.data.byDay.map((d) => d.date), ["2025-06-01", "2025-06-02"]);
+  assert.equal(allJson.data.byDay[1].total, 410);
+  // 按总量降序：model-y(330) > model-x(245)
+  assert.deepEqual(allJson.data.byModel.map((m) => m.model), ["model-y", "model-x"]);
+  assert.deepEqual(allJson.data.byDevice.map((d) => d.device).sort(), ["dev-a", "dev-b"]);
+  assert.ok(allJson.data.devices.includes("dev-a"));
+  assert.ok(allJson.data.models.includes("model-y"));
+
+  // 按设备过滤
+  const devA = await fetch(`${ctx.base}/api/v1/web/stats?days=all&device=dev-a`, {
+    headers: { authorization: "Bearer test-token" },
+  });
+  const devAJson = (await devA.json()) as { data: { summary: { requests: number; totalTokens: number } } };
+  assert.equal(devAJson.data.summary.requests, 2);
+  assert.equal(devAJson.data.summary.totalTokens, 495);
+
+  // 按模型过滤
+  const modelX = await fetch(`${ctx.base}/api/v1/web/stats?days=all&model=model-x`, {
+    headers: { authorization: "Bearer test-token" },
+  });
+  const modelXJson = (await modelX.json()) as { data: { summary: { requests: number; totalTokens: number; cost: number } } };
+  assert.equal(modelXJson.data.summary.requests, 2);
+  assert.equal(modelXJson.data.summary.totalTokens, 245);
+
+  // 时间范围过滤（最近 1 天：无数据）
+  const last1d = await fetch(`${ctx.base}/api/v1/web/stats?days=1`, {
+    headers: { authorization: "Bearer test-token" },
+  });
+  const last1dJson = (await last1d.json()) as { data: { summary: { requests: number } } };
+  assert.equal(last1dJson.data.summary.requests, 0);
+
+  // 未认证 → 401
+  const denied = await fetch(`${ctx.base}/api/v1/web/stats`);
+  assert.equal(denied.status, 401);
+});
