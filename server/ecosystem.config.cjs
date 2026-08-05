@@ -18,6 +18,9 @@ module.exports = {
       script: "dist/index.js",
       cwd: __dirname,
       interpreter: "node",
+      // 用 Node 原生 --env-file 加载 .env（Node ≥ 22，与 pm2 版本无关）；
+      // --env-file-if-exists：.env 不存在时不报错（自动生成令牌兜底）
+      interpreter_args: ["--env-file-if-exists=.env"],
       // fork 模式：单进程，保证 SQLite 单写者
       exec_mode: "fork",
       instances: 1,
@@ -27,8 +30,6 @@ module.exports = {
       restart_delay: 2000,
       // 内存保护：超过 512MB 自动重启
       max_memory_restart: "512M",
-      // 监听 .env（存在时自动加载）
-      env_file: ".env",
       env: {
         NODE_ENV: "production",
         SYNC_HOST: "0.0.0.0",
