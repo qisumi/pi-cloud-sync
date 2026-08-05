@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { pathToFileURL } from "node:url";
 import { SyncDb } from "./db.js";
 import { loadConfig } from "./config.js";
 import { verifyToken, verifyAdminToken, type TokenRecord } from "./auth.js";
@@ -74,8 +75,24 @@ export async function startServer(cfg = loadConfig()) {
   return { app, dbs, cfg };
 }
 
-// 直接运行时启动（node dist/index.js）
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("dist/index.js")) {
+/**
+ * 判断当前模块是否作为应用入口被直接运行。
+ * - node dist/index.js：argv[1] 是本文件 → 匹配
+ * - pm2 fork 模式：pm2 通过 ProcessContainerFork 包装器加载本模块，argv[1] 是包装器路径，
+ *   但 PM2_HOME 环境变量存在，且本模块就是被托管的应用入口 → 也应启动
+ * - 被测试/其他模块 import：两者都不成立 → 不启动
+ */
+function isMainEntry(): boolean {
+  const a1 = process.argv[1];
+  if (!a1) return false;
+  if (import.meta.url === pathToFileURL(a1).href) return true;
+  if (a1.endsWith("dist/index.js")) return true;
+  if (process.env.PM2_HOME) return true;
+  return false;
+}
+
+// 直接运行时启动（node dist/index.js / pm2 托管）
+if (isMainEntry()) {
   startServer().catch((err) => {
     console.error("failed to start server:", err);
     process.exit(1);
