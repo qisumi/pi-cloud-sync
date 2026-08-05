@@ -82,8 +82,8 @@ function renderTable(headers: string[], data: string[][], numericFrom = 1): stri
     });
   }
   const line = (row: string[]) =>
-    row.map((cell, i) => pad(cell, colWidths[i], i >= numericFrom ? "right" : "left")).join("  ");
-  const divider = colWidths.map((width) => "─".repeat(width)).join("  ");
+    row.map((cell, i) => pad(cell, colWidths[i], i >= numericFrom ? "right" : "left")).join("   ");
+  const divider = colWidths.map((width) => "─".repeat(width)).join("   ");
   return [line(headers), divider, ...data.map(line)].join("\n");
 }
 
@@ -167,26 +167,26 @@ export function formatReport(
     return [title, "", md(report.byDay, "按天 (By Day)"), "", md(report.byModel, "按模型 (By Model)")].join("\n");
   }
 
-  const lines: string[] = [`用量 Usage · ${o.days ? `近 ${o.days} 天` : "全部时间"}`];
+  const lines: string[] = [`═══ 用量 Usage · ${o.days ? `近 ${o.days} 天` : "全部时间"} ═══`, ""];
   if (o.view === "full") {
-    lines.push(...summaryLines(report, o));
+    lines.push(...summaryLines(report, o), "");
   } else {
     const s = report.summary;
-    lines.push(`合计 ${fmtNum(s.totalTokens)} tokens · ${fmtCost(s.totalCost, o)} · ${s.requests} 请求 · ${s.sessions} 会话`);
+    lines.push(`合计 ${fmtNum(s.totalTokens)} tokens · ${fmtCost(s.totalCost, o)} · ${s.requests} 请求 · ${s.sessions} 会话`, "");
   }
 
-  lines.push("", "按天 By Day");
+  lines.push("── 按天 By Day ──");
   lines.push(o.view === "full" ? detailedTable(report.byDay, o) : compactTable(report.byDay, o, "日期"));
-  lines.push("", "按模型 By Model");
+  lines.push("", "── 按模型 By Model ──");
   lines.push(o.view === "full" ? detailedTable(report.byModel, o) : compactTable(report.byModel, o, "模型"));
 
   if (o.view === "full") {
-    lines.push("", "按会话 By Session (Top)", detailedTable(report.bySession, o));
+    lines.push("", "── 按会话 By Session (Top) ──", detailedTable(report.bySession, o));
     if (report.sessionDetail) {
-      lines.push("", "当前会话 Current Session", detailedTable([report.sessionDetail], o));
+      lines.push("", "── 当前会话 Current Session ──", detailedTable([report.sessionDetail], o));
     }
   }
-  return lines.join("\n");
+  return lines.join("\n").trimEnd() + "\n";
 }
 
 /** 格式化一个会话的明细 */

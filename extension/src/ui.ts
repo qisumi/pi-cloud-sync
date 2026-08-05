@@ -109,12 +109,6 @@ export async function confirm(ctx: ExtensionCommandContext, title: string, messa
 
 /* ==================== 额度面板 ==================== */
 
-/** 按终端显示宽度补齐（CJK 双宽） */
-function padTo(s: string, width: number): string {
-  const visible = [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
-  return s + " ".repeat(Math.max(0, width - visible));
-}
-
 function barWidth(theme: unknown, usedPct: number | null, width = 12): string {
   const th = theme as { fg: (color: string, s: string) => string };
   if (usedPct == null) return th.fg("dim", "░".repeat(width));
@@ -165,9 +159,9 @@ function meterRow(theme: { fg: (color: string, s: string) => string }, m: QuotaM
   );
 }
 
-/** 计量器短标签（深色/紧凑显示用） */
-function shortLabel(m: QuotaMeter): string {
-  if (m.id === "deepseek.balance") return "余额";
+/** 组名后缀：区分同一渠道下的多个计量器（5h / 周 / 月 / 重置） */
+function groupTag(m: QuotaMeter): string {
+  if (m.id === "deepseek.balance") return "";
   if (m.id === "codex.resetCredits") return "重置";
   if (m.id.startsWith("codex.additional.")) return m.label.replace(/额度/g, "").replace(/\s*·\s*/g, "·");
   if (m.id.endsWith(".fiveHour")) return "5h";
@@ -196,27 +190,26 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
         ` 额度 Quota · ${ts.getMonth() + 1}月${ts.getDate()}日 ${pad2(ts.getHours())}:${pad2(ts.getMinutes())}`,
       ),
     );
+    rows.push("");
 
-    // 渠道名列宽（CJK 双宽）
-    const visLen = (s: string) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
-    const provPad = Math.min(28, Math.max(0, ...report.providers.map((p) => visLen(p.label)))) + 2;
-    const blank = " ".repeat(provPad);
-    const meterPad = Math.min(24, Math.max(0, ...report.providers.map((p) => p.meters.map((m) => visLen(shortLabel(m))).reduce((a, b) => Math.max(a, b), 0)))) + 1;
-
+    // 已配置渠道：每个计量器一组（组名行 + 缩进数据行），组间空行分隔
     for (const p of report.providers) {
-      const providerLabel = padTo(p.label, provPad);
-      if (!p.configured) {
-        rows.push(theme.fg("dim", ` ${providerLabel}○ ${p.error ?? "未配置"}`));
-        continue;
-      }
-      if (!p.ok) {
-        rows.push(theme.fg("warning", ` ${providerLabel}✕ ${p.error ?? "探测失败"}`));
-        continue;
-      }
-      p.meters.forEach((m, i) => {
-        const head = i === 0 ? ` ${providerLabel}` : ` ${blank}`;
-        rows.push(`${head}${theme.fg("dim", padTo(shortLabel(m), meterPad))}${meterRow(th, m)}`);
+      if (!p.configured || !p.ok) continue;
+      p.meters.forEach((m) => {
+        const tag = groupTag(m);
+        rows.push(theme.fg("text", ` ${p.label}${tag ? ` ${tag}` : ""}`));
+        rows.push(`    ${meterRow(th, m)}`);
+        rows.push("");
       });
+    }
+
+    // 未配置 / 探测失败的渠道：单行提示
+    for (const p of report.providers) {
+      if (p.configured && p.ok) continue;
+      const prefix = p.configured ? "✕" : "○";
+      const color = p.configured ? "warning" : "dim";
+      rows.push(theme.fg(color, ` ${p.label}  ${prefix} ${p.error ?? (p.configured ? "探测失败" : "未配置")}`));
+      rows.push("");
     }
 
     // 对比上次（单行）
@@ -236,11 +229,14 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
     }
     if (comps.length > 0) {
       rows.push(theme.fg("muted", ` 对比上次: ${comps.join(" · ")}`));
+      rows.push("");
     }
+
+    rows.push(theme.fg("dim", " Esc 关闭"));
+    rows.push("");
 
     // 单个 Text 渲染所有数据行，避免每行 padding 累积造成空屏。
     container.addChild(new Text(rows.join("\n"), 1, 0));
-    container.addChild(new Text(theme.fg("dim", " Esc 关闭"), 1, 0));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -259,7 +255,10 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
     overlayOptions: {
       anchor: "center",
       width: "90%",
-      maxHeight: Math.min(report.providers.reduce((n, p) => n + Math.max(1, p.meters.length), 0) + 6, 24),
+      maxHeight: Math.min(
+        report.providers.reduce((n, p) => n + (p.configured && p.ok ? Math.max(1, p.meters.length) * 3 : 2), 0) + 6,
+        30,
+      ),
     },
   });
 }

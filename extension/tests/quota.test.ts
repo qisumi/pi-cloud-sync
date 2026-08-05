@@ -403,9 +403,10 @@ test("quota: codex failure allowed in orchestration (does not break others)", as
   assert.match(text, /DeepSeek/);
   assert.match(text, /Codex/);
   assert.ok(!text.includes("参考价"), "额度输出不应混入模型参考价格");
-  // 紧凑展示：一屏可看完（每渠道一行，无渠道分隔空行）
-  assert.ok(text.split("\n").length <= 6, `quota 文本应紧凑，实际 ${text.split("\n").length} 行`);
-  assert.ok(!text.includes("─ "), "不应有渠道分隔行");
+  // 宽松分组：每组 = 组名行 + 缩进数据行，组间空行分隔（不再是每渠道单行紧凑）
+  assert.ok(text.includes("\n\n"), "组间应有空行分隔");
+  assert.ok(text.split("\n").length > 6, `宽松分组后行数应多于 6，实际 ${text.split("\n").length} 行`);
+  assert.ok(/^\s{2}/m.test(text), "数据行应缩进 2 空格");
   const summary = quotaSummary(r);
   assert.match(summary, /余额/);
 });

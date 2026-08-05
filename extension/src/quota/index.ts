@@ -77,33 +77,42 @@ function meterLine(m: QuotaProbeResult["meters"][number]): string {
   return `${bar(m.usedPct)} 剩 ${Math.max(0, 100 - m.usedPct).toFixed(0)}%${tokens}${reset}`;
 }
 
+/** 组名后缀：区分同一渠道下的多个计量器（5h / 周 / 月 / 重置） */
+function groupTag(m: QuotaProbeResult["meters"][number]): string {
+  if (m.id === "deepseek.balance") return "";
+  if (m.id === "codex.resetCredits") return "重置";
+  if (m.id.endsWith(".fiveHour")) return "5h";
+  if (m.id.endsWith(".weekly")) return "周";
+  if (m.id.endsWith(".monthly")) return "月";
+  return m.label;
+}
+
 export function formatQuotaText(report: QuotaReport): string {
   const deltas = computeDeltas(toSnapshot(report.providers, report.ts), report.prev);
   const ts = new Date(report.ts);
   const pad2 = (x: number) => String(x).padStart(2, "0");
   const lines: string[] = [
     `═══ 额度 Quota · ${ts.getMonth() + 1}月${ts.getDate()}日 ${pad2(ts.getHours())}:${pad2(ts.getMinutes())} ═══`,
+    "",
   ];
 
-  // 渠道名列宽（CJK 双宽）
-  const visLen = (s: string) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
-  const padVisible = (s: string, width: number) => s + " ".repeat(Math.max(0, width - visLen(s)));
-  const provPad =
-    Math.max(0, ...report.providers.map((p) => visLen(p.label))) +
-    (report.providers.length > 0 ? 2 : 0);
-  const blank = " ".repeat(provPad);
-
+  // 已配置渠道：每个计量器一组（组名行 + 缩进数据行），组间空行分隔
   for (const p of report.providers) {
-    if (!p.configured || !p.ok) {
-      lines.push(`${padVisible(p.label, provPad)}✕ ${p.error ?? "未配置"}`);
-      continue;
-    }
-    p.meters.forEach((m, i) => {
-      const head = i === 0 ? padVisible(p.label, provPad) : blank;
-      const label = m.id === "deepseek.balance" ? "" : `${m.label} `;
-      lines.push(`${head}${label}${meterLine(m)}`);
+    if (!p.configured || !p.ok) continue;
+    p.meters.forEach((m) => {
+      const tag = groupTag(m);
+      lines.push(tag ? `${p.label} ${tag}` : p.label);
+      lines.push(`  ${meterLine(m)}`);
+      lines.push("");
     });
   }
+
+  // 未配置 / 探测失败的渠道：单行提示
+  for (const p of report.providers) {
+    if (p.configured && p.ok) continue;
+    lines.push(p.configured ? `${p.label}  ✕ ${p.error ?? "探测失败"}` : `${p.label}  ○ ${p.error ?? "未配置"}`);
+  }
+  if (report.providers.some((p) => !p.configured || !p.ok)) lines.push("");
 
   // 对比上次（单行）
   const prevTs = report.prev?.ts;
@@ -123,7 +132,7 @@ export function formatQuotaText(report: QuotaReport): string {
   if (comps.length > 0) {
     lines.push(`对比上次${prevTs ? ` (${new Date(prevTs).toLocaleString()})` : ""}: ${comps.join(" · ")}`);
   }
-  return lines.join("\n");
+  return lines.join("\n").trimEnd() + "\n";
 }
 
 /** 快捷：单行概要（用于 toast / 状态栏） */
