@@ -75,11 +75,14 @@ export async function output(
 async function showTextPane(ctx: ExtensionCommandContext, title: string, lines: string[]): Promise<void> {
   const max = 50; // 上限保护：超出部分折叠为提示行
   const visible = lines.length > max ? [...lines.slice(0, max), `… 还有 ${lines.length - max} 行（完整内容请用 --save=file）`] : lines;
+  let panelWidth = 80; // 兜底宽度；factory 内按内容实际宽度计算
   await ctx.ui.custom<null>((tui, theme, _kb, done) => {
     const container = new Container();
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
     // 面板主体（标题 + 正文 + 提示行）作为一个整体块居中，行内保持左对齐（表格列对齐不变）。
-    container.addChild(new CenteredBlock([theme.fg("accent", theme.bold(title)), ...visible, theme.fg("dim", " Esc/Enter 关闭")].join("\n"), 1));
+    const body = [theme.fg("accent", theme.bold(title)), ...visible, theme.fg("dim", " Esc/Enter 关闭")];
+    panelWidth = panelWidthFor(body);
+    container.addChild(new CenteredBlock(body.join("\n"), 1));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -174,6 +177,7 @@ function groupTag(m: QuotaMeter): string {
  */
 export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaReport): Promise<void> {
   if (!ctx.hasUI || ctx.mode !== "tui") return;
+  let panelWidth = 80; // 兜底宽度；factory 内按内容实际宽度计算
   await ctx.ui.custom<null>((tui, theme, _kb, done) => {
     const container = new Container();
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
@@ -236,6 +240,7 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
     // 单个 CenteredBlock 渲染所有数据行：整块内容左右居中，行内保持左对齐（组名/进度条缩进不变），避免每行 padding 累积造成空屏。
     container.addChild(new CenteredBlock(rows.join("\n"), 1));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    panelWidth = panelWidthFor(rows);
 
     return {
       render: (w) => container.render(w),
@@ -250,14 +255,14 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
     };
   }, {
     overlay: true,
-    overlayOptions: {
+    overlayOptions: () => ({
       anchor: "center",
-      width: "90%",
+      width: panelWidth,
       maxHeight: Math.min(
         report.providers.reduce((n, p) => n + (p.configured && p.ok ? Math.max(1, p.meters.length) * 3 : 2), 0) + 6,
         30,
       ),
-    },
+    }),
   });
 }
 
@@ -276,6 +281,16 @@ export interface ProgressFeedback {
 }
 
 /* ==================== 块级居中组件 ==================== */
+
+/**
+ * 按内容最大显示宽度计算弹窗面板宽度（列数）：内容宽 + 左右 padding/边框 + 少量余量。
+ * - 面板宽与内容贴合（TUI 内部会 clamp 到终端宽度，超宽内容自动退化）。
+ * - 带最小宽度下限，避免内容过窄时面板变成一条细缝。
+ */
+function panelWidthFor(lines: string[], min = 44): number {
+  const maxLine = lines.reduce((m, l) => Math.max(m, visibleWidth(l)), 0);
+  return Math.max(min, maxLine + 4);
+}
 
 /**
  * 块级居中多行文本组件（行内文字不做居中）：
