@@ -230,33 +230,30 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 | **Z.AI 智谱 GLM Coding Plan** | 5 小时额度 + 周额度（tokens） | auth.json 的 `zai` / `zai-coding-cn` / `z-ai` / `zhipu` / `glm` 等（默认优先），或 `ZAI_CODING_CN_API_KEY` / `ZAI_API_KEY` / `ZHIPU_API_KEY` / `GLM_API_KEY` | 中国区 `open.bigmodel.cn`，全球区可用 `ZAI_BASE_URL` 覆盖 |
 | **Codex（OpenAI 订阅）** | 按实际窗口识别 5 小时 / 周 / 月额度，并展示附加额度与可用重置次数 | `~/.codex/auth.json`（`codex login` 生成） | 兼容单窗口与新版响应；访问 ChatGPT 失败时**仅标记不可用，不影响其他渠道** |
 
-> 额度面板示例（TUI，紧凑单屏）：
+> 额度面板示例（TUI，分组布局 · 面板宽度贴合内容、整块居中）：
 >
 > ```
-> 额度 Quota · 8月5日 23:26
->  DeepSeek              余额 ● ¥65.96
->  Z.AI GLM 编程套餐      5h  █████░░░░░░░ 剩 60% 3.20M/8.00M · 1时10分后重置
->                        周   ███████░░░░░ 剩 38% 5.00M/8.00M · 3天后重置
->  Codex (pro)           周   ██░░░░░░░░░░ 剩 82% · 6天后重置
->  对比上次: Z.AI 5h +5%
+>        额度 Quota · 8月5日 23:26
+>
+>        DeepSeek 余额
+>          ● ¥65.96
+>
+>        Z.AI GLM 编程套餐 5h
+>          █████░░░░░░░ 剩 60% 3.20M/8.00M · 1时10分后重置
+>        Z.AI GLM 编程套餐 周
+>          ███████░░░░░ 剩 38% 5.00M/8.00M · 3天后重置
+>
+>        Codex (pro) 周
+>          ██░░░░░░░░░░ 剩 82% · 6天后重置
+>
+>        对比上次: Z.AI 5h +5%
+>
+>        Esc 关闭
 > ```
+>
+> 说明：每个计量器为“组名行 + 缩进进度条行”，组间空行分隔；面板宽度按内容最大显示宽度计算（不超过终端宽度），整块内容左右居中、行内保持左对齐。
 
 ---
-
-```
-用量 Usage · 近 7 天
-合计 1.21M tokens · ¥87.91 · 3214 请求 · 87 会话
-
-按模型 By Model
-模型             Tokens    Cost   Req
-───────────────  ───────  ──────  ────
-claude-sonnet     735.0k  ¥57.20  1900
-deepseek-v4       475.0k  ¥30.71  1314
-```
-
-数据双通道：**实时采集**（消息事件 → `~/.pi/agent/pi-stats.jsonl`，会话清理后仍完整）
-+ **会话扫描**（解析历史 `.jsonl` 补齐，自动去重）。费用直接采用 pi 计算的成本（USD），
-显示时优先用 **Exchangerate-API 实时汇率**换算为人民币 ¥，失败回退 `stats.usdCnyRate`（默认 6.76），可用 `--usd` 查看美元原值。
 
 ## 💬 Session Auto-Naming / 会话自动命名
 

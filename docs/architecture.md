@@ -76,13 +76,40 @@
 
 ### 展示
 
-- `/usage` 命令，ASCII 表格输出；支持 `--json` / `--csv` 导出
-- `/usage live` 切换实时采集
+- `/qisumi-usage` 命令，ASCII 表格输出；支持 `--json` / `--csv` / `--md` 导出
+- TUI 模式用**静态弹窗**（`showTextPane`）整块居中展示；面板宽度按内容最大显示宽度计算，贴合内容
+- `/qisumi-usage live` 切换实时采集
 - footer status：当前会话 token/cost 实时显示（`ctx.ui.setStatus`）
 
 ### 计价
 
 通过 `ctx.modelRegistry` 读取模型 `cost`（每百万 token 单价），未知模型按 0 计。
+
+## TUI 面板展示约定（quota / usage）
+
+所有弹窗面板固化以下规则（详见 `extension/src/ui.ts`）：
+
+1. **内容贴合宽度**：面板宽度由 `panelWidthFor(lines)` 计算（内容最大显示宽度 + 4，下限 44 列），
+   不再用固定 90%；TUI 内部会自动 clamp 到终端宽度，超宽内容自动换行退化。
+2. **块级居中**：内容用 `CenteredBlock` 组件渲染，整块内容左右居中（先取所有行最大宽度作为块宽，整体平移），
+   行内文字保持左对齐 —— 表格列对齐与缩进结构不变。
+3. **单 Text 约定**：所有数据行 `join("\n")` 成一个文本块渲染（组件 paddingY 恒为 0），禁止逐行 `addChild`。
+4. 显示宽度统一用 `visibleWidth`（CJK 全角按 2 列、ANSI 不计宽）；面板高度用 `Math.min(行数 + 头部, 上限)` 控制。
+
+## Web 控制台
+
+服务器内置静态控制台（`server/static/web.html` + `/api/v1/web/*` 接口），浏览器访问 `https://<域名>/web`
+并输入访问令牌即可使用，无需额外部署：
+
+- 分页会话列表（20/40/80 条每页）、消息搜索、角色筛选与排序、Markdown 安全渲染
+- 用量趋势与模型/设备分布（Chart.js CDN 不可用时自动降级）
+- 设备管理：状态、重命名、合并预览与永久历史合并
+- 冲突对比与解决；批量删除会话正文（用量转存为独立轻量摘要）
+- 令牌保存在浏览器 localStorage / sessionStorage，数据全部走服务器 API
+
+前端约定：图标统一用 **Lucide**（jsdelivr UMD）；货币默认人民币 ¥（`fmtCost`），顶部可切 USD，
+汇率来自 `open.er-api.com`（6h 缓存，失败保留旧缓存，fallback 用构建时真实汇率 `USD_CNY_FALLBACK`）；
+动态 innerHTML 生成图标后必须调 `refreshIcons()`。
 
 ## Server 数据模型（SQLite）
 
@@ -114,26 +141,45 @@ tokens(id INTEGER PK AUTOINCREMENT, name TEXT, token TEXT UNIQUE, created_at INT
 | POST | `/conflicts/:id/resolve` | 解决冲突（保留 a / 保留 b / 手动内容） |
 | GET  | `/devices` | 设备列表 |
 | POST | `/devices/heartbeat` | 心跳（push/pull 自动附带） |
+| POST | `/devices/merge/preview` | 设备合并预览 |
+| POST | `/devices/merge` | 永久合并设备（事务化改写历史） |
 | GET  | `/health` | 健康检查 |
 | POST | `/admin/tokens` | 创建访问令牌（`ADMIN_TOKEN` 保护） |
 | GET  | `/admin/tokens` | 令牌列表 |
+| DELETE | `/admin/tokens/:id` | 撤销令牌 |
+| GET  | `/admin/stats` | 对象/会话/冲突/设备统计 |
+| GET  | `/web/sessions` | 网页端会话列表（分页/筛选） |
+| GET  | `/web/sessions/:uuid` | 会话详情（过滤工具消息） |
+| POST | `/web/sessions/delete` | 批量删除会话正文 |
+| GET  | `/web/stats` | 网页端用量趋势与分布 |
 
-## 插件配置（~/.pi/agent/pi-sync.json）
+## 插件配置（~/.pi/agent/pi-sync.json，version 5）
 
 ```jsonc
 {
-  "version": 3,
+  "version": 5,
   "deviceName": "desktop-1",                    // 当前设备名称（来源标注）
-  "server": { "url": "https://sync.example.com", "token": "…" },
+  "server": { "url": "https://sync.example.com", "token": "…", "verifyTls": true },
   "sync": {
     "automatic": true,
     "onStartup": "pull",                        // none | pull
     "onShutdown": "push",                       // none | push
     "scopes": { "config": true, "sessions": true, "plugins": true },
-    "includeConfigs": ["settings.json", "keybindings.json", "models.json"],
+    "includeConfigs": ["settings.json", "keybindings.json", "models.json", "auth.json"],
     "autoInstallPackages": true,
-    "pruneTombstonesAfterDays": 30
+    "pruneTombstonesAfterDays": 30,
+    "stripToolOutputs": true,                    // 不同步工具输出/调用块（本地保留完整）
+    "stripThinking": true                        // 上传时移除 thinking 块
   },
-  "stats": { "collect": true }
+  "stats": {
+    "collect": true,
+    "currency": "cny",                          // usd=$ / cny=¥（默认）
+    "usdCnyRate": 6.76                           // USD→CNY 兜底汇率（运行时优先拉取实时汇率）
+  },
+  "session": {
+    "autoName": true,                            // 新会话自动命名
+    "autoNameMax": 32,
+    "autoNameModelByProvider": { "deepseek": "deepseek-v4-flash", "zai-coding-cn": "glm-4.7", "openai-codex": "gpt-5.6-luna" }
+  }
 }
 ```

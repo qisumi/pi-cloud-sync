@@ -58,6 +58,8 @@ sync.example.com {
 }
 ```
 
+部署后浏览器访问 `https://sync.example.com/web` 即可打开内置 **Web 控制台**（会话浏览 / 用量趋势 / 设备管理 / 冲突解决），输入访问令牌登录。
+
 ## 令牌管理
 
 访问令牌是客户端连接凭证。两种方式获取：
@@ -98,10 +100,15 @@ curl http://localhost:8787/api/v1/admin/stats \
 | `SYNC_ADMIN_TOKEN` | 空 | 管理令牌（不设则管理 API 不可用） |
 | `SYNC_MAX_BATCH` | `5000` | 单会话最大条目数 |
 | `SYNC_MAX_OBJECT_BYTES` | `10485760` | 单对象最大字节 |
+| `SYNC_PUBLIC_URL` | 空 | 对外 URL（仅用于文档展示） |
 | `SYNC_LOG_LEVEL` | `info` | 日志级别 |
+
+> **运行环境**：Node.js 20+（fastify 5 要求）；服务器依赖 `better-sqlite3` 原生模块，首次安装需要编译工具链（或使用 Docker 镜像）。
 
 ## 常见问题
 
 - **客户端 401**：检查令牌是否一致（服务器 `data/token.txt` vs 客户端 `~/.pi/agent/pi-sync.json`）。
 - **端口占用**：修改 `SYNC_PORT` 并同步更新反向代理。
 - **数据库迁移**：SQLite 文件自动迁移，升级无需手工操作；升级前建议备份 `data/sync.db`。
+- **Web 控制台打不开**：确认使用域名/HTTPS 访问 `/web`，且反向代理未拦截 `/api/v1/web/*`。
+- **升级服务器依赖**：fastify 5 需配套 `@fastify/compress` v8+，`npm install` 时请勿降级。

@@ -57,14 +57,16 @@ await ctx.ui.custom<null>((tui, theme, _kb, done) => { /* ... */ });
 
 - 修复 commit：`deaf0da`（`ui.ts` 中 `output()` / `showTextPane()` / `quotaDialog()` 三处一并补上）。
 - `overlayOptions` 用 `anchor: "center"` + `width` / `maxHeight`（数值或百分比），`maxHeight` 必须用 `Math.min(行数 + 头部, 上限)` 防止超出终端高度。
+- **quota / usage 面板宽度贴合内容**：宽度用 `panelWidthFor(lines)` 计算（内容最大显示宽度 + 4，下限 44 列），不要写死 `"90%"`；TUI 内部会自动 clamp 到终端宽度，超宽内容自动换行退化。
+- **内容用 `CenteredBlock` 组件整块居中**：取所有行最大宽度作为块宽整体平移，行内保持左对齐（表格列对齐 / 缩进不变）；需要居中时用它，不要逐行居中。
 - 文档依据：pi 包内 `docs/tui.md` 的 Overlays 章节。
 
-### 2. 面板内容用「单个 `Text` + `\n`」渲染，不要逐行 `addChild(new Text(...))`
+### 2. 面板内容用「单个 `Text` / `CenteredBlock` + `\n`」渲染，不要逐行 `addChild(new Text(...))`
 
 ```ts
-// ✅ 正确：所有数据行 join("\n") 成一个 Text
-container.addChild(new Text(rows.join("\n"), 1, 0));
-container.addChild(new Text(theme.fg("dim", " Esc 关闭"), 1, 0));
+// ✅ 正确：所有数据行 join("\n") 成一个组件（需居中用 CenteredBlock，否则 Text）
+container.addChild(new CenteredBlock(rows.join("\n"), 1));
+container.addChild(new CenteredBlock(theme.fg("dim", " Esc 关闭"), 1));
 
 // ❌ 错误：每行一个 Text 组件 —— 逐行累积垂直留白，内容被顶出可视区 → 空屏
 rows.forEach((row, i) => container.addChild(new Text(row, 1, i + 1)));
@@ -105,6 +107,7 @@ const padVisible = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visL
 - 并发额度探测：`probeAllQuotas()` 用 `Promise.allSettled`，Codex 失败不抛错，每个渠道独立报错。
 - 数据格式：tokens 用 `fmtNum`（k/M/B），费用用 `fmtCost`（cny=¥ / usd=$）；金额展示保留 4 位小数（`$0.1234`）。
 - 服务器 API 改动需同步更新 `shared/src/index.ts` 协议类型与 `docs/protocol.md`。
+- 服务器依赖：fastify 5 必须配套 `@fastify/compress` v8+（v7 只支持 fastify 4，会导致启动报 `FST_ERR_PLUGIN_VERSION_MISMATCH`）。
 - 改完记得跑 `npm run typecheck && npm test`（extension）与 server 测试。
 
 ## 网页端（server/static/web.html）约定

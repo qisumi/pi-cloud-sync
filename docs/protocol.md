@@ -37,10 +37,17 @@ PATCH /api/v1/devices/:id               # { name } 重命名
 POST /api/v1/devices/merge/preview      # { sourceDeviceIds, targetDeviceId }
 POST /api/v1/devices/merge              # 上述字段 + confirmTargetName，事务化永久合并
 GET  /api/v1/health                     # 健康检查
+GET  /api/v1/web/sessions               # 网页端会话列表（分页/筛选/搜索）
+GET  /api/v1/web/sessions/:uuid         # 会话详情（过滤 tool 消息）
+POST /api/v1/web/sessions/delete        # 批量删除会话正文（用量转存独立摘要）
+GET  /api/v1/web/stats                  # 用量趋势与模型/设备分布
+GET  /api/v1/admin/stats                # 对象/会话/冲突/设备数量
 ```
 
 `/api/v1/sessions/push|pull` 暂时保留给旧客户端；新客户端必须使用 v2。服务端健康响应的 `protocol` 必须与插件一致，
 不匹配时插件停止同步并提示同时升级。
+
+> Web 控制台端点（`/api/v1/web/*`）与同步协议共用 Bearer Token 认证，供浏览器端调用，详见 `docs/architecture.md`。
 
 ## 会话增量与确认
 
