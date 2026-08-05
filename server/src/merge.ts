@@ -122,6 +122,10 @@ export function mergeObject(
 
   // 并发修改：仅 JSON 且客户端提供字段变更时做字段级合并
   if (change.jsonFields && change.jsonFields.length > 0 && isJsonObject(row.data)) {
+    // auth.json：提供商级智能合并（按提供商原子合并，OAuth 看 expires）
+    if (change.key.endsWith("auth.json")) {
+      return mergeAuthJson(dbs, change, row, deviceName, nowMs);
+    }
     return mergeJsonFields(dbs, change, row, deviceName, nowMs);
   }
 
@@ -450,6 +454,167 @@ function unionArrays(a: unknown[], b: unknown[]): unknown[] {
     }
   }
   return out;
+}
+
+/**
+ * auth.json 智能合并：以「提供商」为原子单位。
+ * - 不同提供商 → 并集（各设备各自登录的账号共存）
+ * - 相同提供商、内容相同 → 保留
+ * - 相同提供商、内容不同 → 版本高者胜；同版本时：
+ *   OAuth 比较 expires（未过期者胜出）；api_key 视为冲突，记录待解决
+ */
+function mergeAuthJson(
+  dbs: SyncDb,
+  change: PushChange,
+  row: { key: string; version: number; sha256: string; data: string },
+  deviceName: string,
+  nowMs: number,
+): ObjectMergeResult {
+  const db = dbs.db;
+  const conflicts: ObjectMergeResult["conflicts"] = [];
+  const serverObj = JSON.parse(row.data) as Record<string, unknown>;
+  const clientObj = JSON.parse(decodeContent(change)) as Record<string, unknown>;
+  const clientFields = new Map((change.jsonFields ?? []).map((f) => [f.path, f]));
+  const result: Record<string, unknown> = {};
+
+  const readField = db.prepare(
+    `SELECT version, value, updated_by FROM config_field_versions WHERE object_key = ? AND path = ?`,
+  );
+  const upsertField = db.prepare(
+    `INSERT INTO config_field_versions (object_key, path, version, value, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(object_key, path) DO UPDATE SET
+       version = excluded.version, value = excluded.value,
+       updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+  );
+
+  let changed = false;
+  const allProviders = new Set([...Object.keys(serverObj), ...Object.keys(clientObj)]);
+
+  for (const provider of allProviders) {
+    const serverEntry = serverObj[provider];
+    const clientEntry = clientObj[provider];
+    const cf = clientFields.get(provider);
+    const sf = readField.get(change.key, provider) as
+      | { version: number; value: string; updated_by: string }
+      | undefined;
+    const clientV = cf?.version ?? 0;
+    const serverV = sf?.version ?? 0;
+
+    if (serverEntry === undefined) {
+      // 客户端新增提供商 → 采纳
+      result[provider] = clientEntry;
+      upsertField.run(change.key, provider, clientV || 1, JSON.stringify(clientEntry), deviceName, nowMs);
+      changed = true;
+      continue;
+    }
+    if (clientEntry === undefined) {
+      // 服务器独有 → 保留
+      result[provider] = serverEntry;
+      continue;
+    }
+    if (JSON.stringify(serverEntry) === JSON.stringify(clientEntry)) {
+      // 内容一致 → 保留，版本取大
+      result[provider] = serverEntry;
+      if (clientV > serverV) {
+        upsertField.run(change.key, provider, clientV, JSON.stringify(serverEntry), deviceName, nowMs);
+      }
+      continue;
+    }
+
+    // 内容不同：版本高者胜
+    if (clientV > serverV) {
+      result[provider] = clientEntry;
+      upsertField.run(change.key, provider, clientV, JSON.stringify(clientEntry), deviceName, nowMs);
+      changed = true;
+      continue;
+    }
+    if (clientV < serverV) {
+      // 服务器版本更高 → 服务器保留，客户端内容记录冲突
+      result[provider] = serverEntry;
+      conflicts.push({
+        objectKey: change.key,
+        path: provider,
+        kind: change.kind,
+        deviceA: deviceName,
+        deviceB: sf?.updated_by ?? "unknown",
+        contentA: JSON.stringify(clientEntry),
+        contentB: JSON.stringify(serverEntry),
+      });
+      continue;
+    }
+
+    // 同版本不同内容 → 智能挑选
+    const winner = pickAuthWinner(serverEntry, clientEntry);
+    result[provider] = winner.content;
+    if (winner.from === "client") {
+      upsertField.run(change.key, provider, serverV + 1, JSON.stringify(winner.content), deviceName, nowMs);
+      changed = true;
+    } else {
+      conflicts.push({
+        objectKey: change.key,
+        path: provider,
+        kind: change.kind,
+        deviceA: deviceName,
+        deviceB: sf?.updated_by ?? "unknown",
+        contentA: JSON.stringify(clientEntry),
+        contentB: JSON.stringify(serverEntry),
+      });
+    }
+  }
+
+  const mergedContent = JSON.stringify(result, null, 2);
+  const sha = sha256Hex(mergedContent);
+  const nextVersion = row.version + (changed || conflicts.length > 0 ? 1 : 0);
+
+  db.prepare(
+    `UPDATE objects SET version = ?, sha256 = ?, data = ?, updated_by = ?, updated_at = ? WHERE key = ?`,
+  ).run(nextVersion, sha, mergedContent, deviceName, nowMs, change.key);
+
+  for (const c of conflicts) {
+    db.prepare(
+      `INSERT INTO conflicts (object_key, path, kind, device_a, device_b, content_a, content_b, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(c.objectKey, c.path, c.kind, c.deviceA, c.deviceB, c.contentA, c.contentB, nowMs);
+  }
+
+  const merged: MergedObject = {
+    key: change.key,
+    kind: change.kind,
+    version: nextVersion,
+    sha256: sha,
+    contentB64: Buffer.from(mergedContent, "utf8").toString("base64"),
+    fieldVersions: (Object.keys(result) as string[]).map((p) => {
+      const fv = readField.get(change.key, p) as { version: number; updated_by: string; updated_at: number };
+      return { path: p, version: fv?.version ?? 1, updatedBy: fv?.updated_by ?? deviceName, updatedAt: fv?.updated_at ?? nowMs };
+    }),
+    updatedBy: deviceName,
+    updatedAt: nowMs,
+    deleted: false,
+  };
+  return { merged, conflicts };
+}
+
+/** 同提供商同版本不同内容时的挑选策略 */
+function pickAuthWinner(
+  serverEntry: unknown,
+  clientEntry: unknown,
+): { from: "server" | "client"; content: unknown } {
+  const exp = (e: unknown): number => {
+    if (e && typeof e === "object" && (e as Record<string, unknown>).type === "oauth") {
+      const v = Number((e as Record<string, unknown>).expires ?? 0);
+      return Number.isFinite(v) ? v : 0;
+    }
+    return 0;
+  };
+  const se = exp(serverEntry);
+  const ce = exp(clientEntry);
+  if (se || ce) {
+    // OAuth：expires 更晚（更可能有效）者胜出
+    return ce > se ? { from: "client", content: clientEntry } : { from: "server", content: serverEntry };
+  }
+  // api_key 无过期信息：保留服务器版本，记录冲突由用户裁决
+  return { from: "server", content: serverEntry };
 }
 
 function applyClientField(

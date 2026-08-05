@@ -99,7 +99,7 @@ export function buildConfigChanges(cfg: SyncConfig, state: SyncState): PushChang
         sha256: sha,
         contentB64: Buffer.from(content, "utf8").toString("base64"),
         mtime,
-        jsonFields: diffJsonFields(st, content),
+        jsonFields: diffJsonFields(st, content, file),
       });
     } else {
       changes.push({
@@ -115,10 +115,34 @@ export function buildConfigChanges(cfg: SyncConfig, state: SyncState): PushChang
   return changes;
 }
 
-/** 对比上次推送的 JSON 与当前内容，生成字段级变更（版本递增） */
-function diffJsonFields(st: { fields: Record<string, { version: number; value: string }> }, content: string) {
+/** 对比上次推送的 JSON 与当前内容，生成字段级变更（版本递增）
+ * auth.json 使用提供商级原子 diff（每个提供商一个字段，避免密钥交叉错位） */
+function diffJsonFields(
+  st: { fields: Record<string, { version: number; value: string }> },
+  content: string,
+  file?: string,
+) {
   const prev = loadPrevJson(st);
   const cur = JSON.parse(content) as Record<string, unknown>;
+
+  // auth.json：按提供商原子合并
+  if (file && file.endsWith("auth.json")) {
+    const providers = new Set([...Object.keys(prev ?? {}), ...Object.keys(cur)]);
+    const fields: Array<{ path: string; valueJson: string; version: number }> = [];
+    for (const p of providers) {
+      const prevVal = (prev as Record<string, unknown> | undefined)?.[p];
+      const curVal = cur[p];
+      const prevJson = prevVal === undefined ? undefined : JSON.stringify(prevVal);
+      const curJson = curVal === undefined ? undefined : JSON.stringify(curVal);
+      if (prevJson === curJson) continue;
+      const known = st.fields[p];
+      const version = (known?.version ?? 0) + 1;
+      fields.push({ path: p, valueJson: JSON.stringify(curVal), version });
+      st.fields[p] = { version, value: JSON.stringify(curVal) };
+    }
+    return fields;
+  }
+
   const prevPaths = new Set(collectLeafPaths(prev));
   const curPaths = new Set(collectLeafPaths(cur));
   const all = new Set([...prevPaths, ...curPaths]);

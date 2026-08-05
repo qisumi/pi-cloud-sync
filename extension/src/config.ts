@@ -32,7 +32,7 @@ export interface SyncConfig {
 }
 
 const DEFAULTS: SyncConfig = {
-  version: 3,
+  version: 4,
   deviceName: "",
   server: null,
   sync: {
@@ -40,7 +40,7 @@ const DEFAULTS: SyncConfig = {
     onStartup: "pull",
     onShutdown: "push",
     scopes: { config: true, sessions: true, plugins: true },
-    includeConfigs: ["settings.json", "keybindings.json", "models.json"],
+    includeConfigs: ["settings.json", "keybindings.json", "models.json", "auth.json"],
     autoInstallPackages: true,
     pruneTombstonesAfterDays: 30,
   },
@@ -91,6 +91,18 @@ export function loadConfig(): SyncConfig {
     console.error("[pi-cloud-sync] failed to load config:", err);
   }
   if (!cfg.deviceName) cfg.deviceName = hostname();
+  // 迁移：v3 → v4 自动把 auth.json 加入同步列表（默认无感开启，仅执行一次）
+  if ((cfg.version ?? 0) < 4 && !cfg.sync.includeConfigs.includes("auth.json")) {
+    cfg.sync.includeConfigs.push("auth.json");
+    cfg.version = 4;
+    try {
+      saveConfig(cfg);
+    } catch {
+      // ignore
+    }
+  } else if ((cfg.version ?? 0) < 4) {
+    cfg.version = 4;
+  }
   return cfg as SyncConfig;
 }
 

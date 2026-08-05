@@ -239,3 +239,54 @@ test("config file load/save roundtrip keeps legacy fields", () => {
   const reread = JSON.parse(readFileSync(join(dir, "pi-sync.json"), "utf8"));
   assert.equal(reread.storageConnections.old.type, "webdav");
 });
+
+
+test("auth.json: provider-level diff & v4 migration", () => {
+  const dir = tempAgentDir();
+  const cfg = loadConfig();
+  // v4 迁移：includeConfigs 应包含 auth.json
+  assert.ok(cfg.sync.includeConfigs.includes("auth.json"), "auth.json in defaults");
+  assert.equal(cfg.version, 4);
+  cfg.sync.includeConfigs = ["settings.json", "keybindings.json", "models.json", "auth.json"];
+  saveConfig(cfg);
+
+  const authPath = join(dir, "auth.json");
+  write(authPath, JSON.stringify({ deepseek: { type: "api_key", key: "sk-1" }, openai: { type: "api_key", key: "sk-2" } }));
+
+  const state = loadState();
+  const changes = buildConfigChanges(cfg, state);
+  const authChange = changes.find((c) => c.key === "config/auth.json");
+  assert.ok(authChange);
+  // 提供商级字段：2 个 provider，各 version 1
+  assert.equal(authChange.jsonFields!.length, 2);
+  assert.equal(authChange.jsonFields!.find((f) => f.path === "deepseek")!.version, 1);
+  assert.deepEqual(JSON.parse(authChange.jsonFields!.find((f) => f.path === "openai")!.valueJson), { type: "api_key", key: "sk-2" });
+
+  // 修改一个提供商 → 只 diff 该提供商，版本 +1
+  write(authPath, JSON.stringify({ deepseek: { type: "api_key", key: "sk-new" }, openai: { type: "api_key", key: "sk-2" } }));
+  const changes2 = buildConfigChanges(cfg, state);
+  const authChange2 = changes2.find((c) => c.key === "config/auth.json");
+  assert.ok(authChange2);
+  assert.equal(authChange2.jsonFields!.length, 1);
+  assert.equal(authChange2.jsonFields![0].path, "deepseek");
+  assert.equal(authChange2.jsonFields![0].version, 2);
+});
+
+test("config: v3 -> v4 migration adds auth.json once", () => {
+  const dir = tempAgentDir();
+  // 模拟旧 v3 配置
+  const old = {
+    version: 3,
+    deviceName: "old-dev",
+    sync: {
+      includeConfigs: ["settings.json", "keybindings.json", "models.json"],
+    },
+  };
+  write(join(dir, "pi-sync.json"), JSON.stringify(old));
+  const cfg = loadConfig();
+  assert.ok(cfg.sync.includeConfigs.includes("auth.json"), "migration added auth.json");
+  assert.equal(cfg.version, 4);
+  // 已持久化
+  const reread = JSON.parse(readFileSync(join(dir, "pi-sync.json"), "utf8"));
+  assert.ok(reread.sync.includeConfigs.includes("auth.json"));
+});

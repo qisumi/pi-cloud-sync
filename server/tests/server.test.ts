@@ -457,3 +457,161 @@ test("admin token management", async (t) => {
   assert.equal(ok.status, 200);
 
 });
+
+
+test("auth.json smart merge: different providers union", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  const pushAuth = (devId: string, devName: string, content: unknown, fields: Array<{ path: string; valueJson: string; version: number }>) =>
+    fetch(`${ctx.base}/api/v1/sync/push`, {
+      method: "POST",
+      headers: headers(ctx, { "x-device-id": devId, "x-device-name": devName }),
+      body: JSON.stringify({
+        changes: [{
+          kind: "config",
+          key: "config/auth.json",
+          baseSha256: null,
+          sha256: "a0",
+          contentB64: b64(JSON.stringify(content)),
+          jsonFields: fields,
+        }],
+      }),
+    });
+
+  const hbA = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify({ deviceId: "", name: "dev-a", platform: "linux", piVersion: "1", extensionVersion: "1" }),
+  });
+  const idA = ((await hbA.json()) as { data: { deviceId: string } }).data.deviceId;
+
+  await pushAuth(idA, "dev-a", { deepseek: { type: "api_key", key: "sk-a" } }, [
+    { path: "deepseek", valueJson: JSON.stringify({ type: "api_key", key: "sk-a" }), version: 1 },
+  ]);
+
+  const hbB = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify({ deviceId: "", name: "dev-b", platform: "linux", piVersion: "1", extensionVersion: "1" }),
+  });
+  const idB = ((await hbB.json()) as { data: { deviceId: string } }).data.deviceId;
+
+  const pushB = await pushAuth(idB, "dev-b", { openai: { type: "api_key", key: "sk-b" } }, [
+    { path: "openai", valueJson: JSON.stringify({ type: "api_key", key: "sk-b" }), version: 1 },
+  ]);
+  const mergedB = JSON.parse(Buffer.from(((await pushB.json()) as { data: { objects: Array<{ contentB64: string }> } }).data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.equal(mergedB.deepseek.key, "sk-a");
+  assert.equal(mergedB.openai.key, "sk-b");
+
+  const pullA = await fetch(`${ctx.base}/api/v1/sync/pull`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ keys: ["config/auth.json"] }),
+  });
+  const pullAJson = (await pullA.json()) as { data: { objects: Array<{ contentB64: string }> } };
+  const mergedA = JSON.parse(Buffer.from(pullAJson.data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.equal(mergedA.deepseek.key, "sk-a");
+  assert.equal(mergedA.openai.key, "sk-b");
+});
+
+test("auth.json smart merge: same provider same version api_key -> conflict", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  const pushAuth = (devId: string, devName: string, content: unknown, fields: Array<{ path: string; valueJson: string; version: number }>) =>
+    fetch(`${ctx.base}/api/v1/sync/push`, {
+      method: "POST",
+      headers: headers(ctx, { "x-device-id": devId, "x-device-name": devName }),
+      body: JSON.stringify({
+        changes: [{
+          kind: "config",
+          key: "config/auth.json",
+          baseSha256: null,
+          sha256: "a0",
+          contentB64: b64(JSON.stringify(content)),
+          jsonFields: fields,
+        }],
+      }),
+    });
+
+  const hbA = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify({ deviceId: "", name: "dev-a", platform: "linux", piVersion: "1", extensionVersion: "1" }),
+  });
+  const idA = ((await hbA.json()) as { data: { deviceId: string } }).data.deviceId;
+  const hbB = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify({ deviceId: "", name: "dev-b", platform: "linux", piVersion: "1", extensionVersion: "1" }),
+  });
+  const idB = ((await hbB.json()) as { data: { deviceId: string } }).data.deviceId;
+
+  await pushAuth(idA, "dev-a", { deepseek: { type: "api_key", key: "sk-old" } }, [
+    { path: "deepseek", valueJson: JSON.stringify({ type: "api_key", key: "sk-old" }), version: 1 },
+  ]);
+
+  const pushB = await pushAuth(idB, "dev-b", { deepseek: { type: "api_key", key: "sk-new" } }, [
+    { path: "deepseek", valueJson: JSON.stringify({ type: "api_key", key: "sk-new" }), version: 1 },
+  ]);
+  const pushBJson = (await pushB.json()) as { data: { objects: Array<{ contentB64: string }>; conflicts: Array<{ path: string }> } };
+  assert.ok(pushBJson.data.conflicts.length >= 1);
+  assert.equal(pushBJson.data.conflicts[0].path, "deepseek");
+  const merged = JSON.parse(Buffer.from(pushBJson.data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.equal(merged.deepseek.key, "sk-old");
+});
+
+test("auth.json smart merge: oauth later expires wins", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  const pushAuth = (devId: string, devName: string, content: unknown, fields: Array<{ path: string; valueJson: string; version: number }>) =>
+    fetch(`${ctx.base}/api/v1/sync/push`, {
+      method: "POST",
+      headers: headers(ctx, { "x-device-id": devId, "x-device-name": devName }),
+      body: JSON.stringify({
+        changes: [{
+          kind: "config",
+          key: "config/auth.json",
+          baseSha256: null,
+          sha256: "a0",
+          contentB64: b64(JSON.stringify(content)),
+          jsonFields: fields,
+        }],
+      }),
+    });
+
+  const hbA = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify({ deviceId: "", name: "dev-a", platform: "linux", piVersion: "1", extensionVersion: "1" }),
+  });
+  const idA = ((await hbA.json()) as { data: { deviceId: string } }).data.deviceId;
+  const hbB = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
+    body: JSON.stringify({ deviceId: "", name: "dev-b", platform: "linux", piVersion: "1", extensionVersion: "1" }),
+  });
+  const idB = ((await hbB.json()) as { data: { deviceId: string } }).data.deviceId;
+
+  await pushAuth(idA, "dev-a", { codex: { type: "oauth", access: "a1", refresh: "r1", expires: 1000 } }, [
+    { path: "codex", valueJson: JSON.stringify({ type: "oauth", access: "a1", refresh: "r1", expires: 1000 }), version: 1 },
+  ]);
+
+  const pushB = await pushAuth(idB, "dev-b", { codex: { type: "oauth", access: "a2", refresh: "r2", expires: 9999999 } }, [
+    { path: "codex", valueJson: JSON.stringify({ type: "oauth", access: "a2", refresh: "r2", expires: 9999999 }), version: 1 },
+  ]);
+  const pushBJson = (await pushB.json()) as { data: { objects: Array<{ contentB64: string }>; conflicts: unknown[] } };
+  assert.equal(pushBJson.data.conflicts.length, 0);
+  const merged = JSON.parse(Buffer.from(pushBJson.data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.equal(merged.codex.access, "a2");
+
+  const pushB2 = await pushAuth(idB, "dev-b", { codex: { type: "oauth", access: "a3", refresh: "r3", expires: 500 } }, [
+    { path: "codex", valueJson: JSON.stringify({ type: "oauth", access: "a3", refresh: "r3", expires: 500 }), version: 2 },
+  ]);
+  const pushB2Json = (await pushB2.json()) as { data: { objects: Array<{ contentB64: string }>; conflicts: unknown[] } };
+  assert.ok(pushB2Json.data.conflicts.length >= 1);
+  const merged2 = JSON.parse(Buffer.from(pushB2Json.data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.equal(merged2.codex.access, "a2");
+});
