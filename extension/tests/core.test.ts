@@ -10,6 +10,7 @@ import { UsageCollector } from "../src/stats/collector.js";
 import { scanSessionFile, mergeRecords, buildReport } from "../src/stats/analyzer.js";
 import { formatReport } from "../src/stats/report.js";
 import { fetchUsdCnyRate, clearRateCache } from "../src/stats/rates.js";
+import { summarizeName } from "../src/session.js";
 import type { MergedObject, SessionSnapshot } from "../src/types.js";
 
 function tempAgentDir(): string {
@@ -225,6 +226,34 @@ test("stats: usd-cny rate from exchangerate-api (mock), cache, failure fallback"
   clearRateCache();
   const badFetch = async () => new Response(JSON.stringify({ result: "error" }), { status: 200 });
   assert.equal(await fetchUsdCnyRate(badFetch), null);
+});
+
+test("session: summarizeName strips markdown/code and truncates", () => {
+  assert.equal(summarizeName("帮我重构一下这个函数", 32), "帮我重构一下这个函数");
+  // markdown / 代码 / 链接清理
+  assert.equal(summarizeName("**重点**：修复 [#42](https://x.y) 的 bug\n```js\ncode\n```", 32), "重点：修复 42 的 bug");
+  // 超长截断 + 省略号
+  const long = "这是一个非常非常非常非常非常非常非常非常非常长的会话描述";
+  const s = summarizeName(long, 16);
+  assert.equal(s.length, 16);
+  assert.ok(s.endsWith("…"));
+  // 空/纯符号 → 占位名
+  assert.equal(summarizeName("``` ```\n###", 32), "（未命名会话）");
+});
+
+test("session: config defaults include autoName & cheap model mapping", () => {
+  const c = loadConfig();
+  assert.equal(c.session.autoName, true);
+  assert.equal(c.session.autoNameMax, 32);
+  assert.equal(c.session.defaultCheapModel, true);
+  // 各订阅内相对低价模型默认值
+  assert.equal(c.session.cheapModelByProvider["deepseek"], "deepseek-v4-flash");
+  assert.equal(c.session.cheapModelByProvider["zai-coding-cn"], "glm-4.7");
+  assert.equal(c.session.cheapModelByProvider["openai-codex"], "gpt-5.6-luna");
+  // saveConfig 往返保留 session
+  saveConfig(c);
+  const c2 = loadConfig();
+  assert.equal(c2.session.defaultCheapModel, true);
 });
 
 test("stats: session scan produces records", () => {

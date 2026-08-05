@@ -18,6 +18,7 @@ import { formatReport, formatSessionSummary } from "./stats/report.js";
 import { fetchUsdCnyRate } from "./stats/rates.js";
 import { output, startProgress, quotaDialog } from "./ui.js";
 import { probeAllQuotas, formatQuotaText, quotaSummary } from "./quota/index.js";
+import { registerSessionHooks, sessionStatus, cmdSessionRename } from "./session.js";
 import { writeFileSync } from "node:fs";
 
 const EXT_VERSION = "0.1.0";
@@ -258,6 +259,9 @@ function cmdSyncConfigShow(): string {
     `stats.collect: ${cfg.stats.collect}`,
     `stats.currency: ${cfg.stats.currency}  (--cny/--usd 可临时切换)`,
     `stats.usdCnyRate: ${cfg.stats.usdCnyRate}`,
+    `session.autoName: ${cfg.session?.autoName} (最长 ${cfg.session?.autoNameMax ?? 32} 字)`,
+    `session.defaultCheapModel: ${cfg.session?.defaultCheapModel}`,
+    `session.cheapModelByProvider: ${JSON.stringify(cfg.session?.cheapModelByProvider ?? {})}`,
   ].join("\n");
 }
 
@@ -638,6 +642,12 @@ export default function (pi: ExtensionAPI) {
         "stats.collect",
         "stats.currency",
         "stats.usdCnyRate",
+        "session.autoName",
+        "session.autoNameMax",
+        "session.defaultCheapModel",
+        "session.cheapModelByProvider.deepseek",
+        "session.cheapModelByProvider.zai-coding-cn",
+        "session.cheapModelByProvider.openai-codex",
       ];
       return keys.filter((k) => k.startsWith(p)).map((value) => ({ value, label: value }));
     },
@@ -664,6 +674,14 @@ export default function (pi: ExtensionAPI) {
     },
   );
 
+  // ---- 会话 ----
+  reg("qisumi-session", "查看当前会话信息与命名/低价模型配置", (_args, ctx) => Promise.resolve(sessionStatus(cfg, ctx)), {
+    title: "会话",
+  });
+  reg("qisumi-session-rename", "重命名当前会话 <名称>", (args, _ctx) => Promise.resolve(cmdSessionRename(pi, args)), {
+    title: "会话",
+  });
+
   // ---- 额度探测 ----
   reg("qisumi-quota", "额度探测：DeepSeek 余额 / Z.AI 5h+周 / Codex 周 [--json]", (args, ctx) => cmdQuota(args, ctx), {
     title: "额度探测",
@@ -672,6 +690,9 @@ export default function (pi: ExtensionAPI) {
       return prefix.trim().startsWith("--") ? [{ value: "--json", label: "--json 输出 JSON" }] : null;
     },
   });
+
+  // 会话自动命名 / 新会话低价默认模型
+  registerSessionHooks(pi, () => cfg);
 
   registerEvents(pi);
 }

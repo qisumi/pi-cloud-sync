@@ -276,6 +276,39 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 | | GLM-4.7-FlashX | 0.5 | 3 | 0.1 | |
 | | GLM-4.7-Flash | 免费 | 免费 | 免费 | |
 
+## 💬 Session Auto-Naming / 会话自动命名
+
+新会话收到第一条用户消息时自动命名（取消息摘要，去代码/markdown、截断到 `session.autoNameMax` 字），
+已手动命名的会话不会被覆盖。同时新会话默认切换到**订阅内成本相对低的模型**：
+
+```bash
+/qisumi-session         # 查看当前会话信息 + 命名/低价模型配置
+/qisumi-session-rename <名称>   # 手动重命名当前会话
+```
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `session.autoName` | `true` | 自动命名开关 |
+| `session.autoNameMax` | `32` | 自动命名最大长度（字） |
+| `session.defaultCheapModel` | `true` | 新会话默认使用低价模型 |
+| `session.cheapModelByProvider` | 见下 | provider → 低价模型 id 映射 |
+
+默认低价模型映射（按各订阅目录内成本相对低者）：
+
+| provider | 低价默认模型 | 对比（$ / 1M tokens，输入/输出） |
+| --- | --- | --- |
+| `deepseek` | `deepseek-v4-flash` | 0.14/0.28 vs v4-pro 0.435/0.87 |
+| `zai-coding-cn` | `glm-4.7` | 套餐内相对最低（glm-5.2 8/28、5-turbo 5/22） |
+| `openai-codex` | `gpt-5.6-luna` | 0.2/1.2 vs gpt-5.4-mini 0.75/4.5、gpt-5.5 5/30 |
+
+可随时覆盖，例如：
+
+```bash
+/qisumi-sync-config-set session.cheapModelByProvider.deepseek deepseek-chat
+/qisumi-sync-config-set session.autoNameMax 48
+/qisumi-sync-config-set session.defaultCheapModel false
+```
+
 ---
 
 ## 🧪 Development / 开发

@@ -35,6 +35,16 @@ export interface SyncConfig {
     /** USD→CNY 汇率（currency=cny 时用于换算显示；运行时优先拉取 Exchangerate-API 实时汇率） */
     usdCnyRate: number;
   };
+  session: {
+    /** 自动为新会话命名（取首条用户消息摘要） */
+    autoName: boolean;
+    /** 自动命名最大长度 */
+    autoNameMax: number;
+    /** 新会话默认使用订阅内低价模型 */
+    defaultCheapModel: boolean;
+    /** provider → 低价模型 id（按 pi models 目录，可覆盖） */
+    cheapModelByProvider: Record<string, string>;
+  };
   /** 兼容旧版字段（WebDAV 等），保留不动 */
   legacy?: Record<string, unknown>;
 }
@@ -55,6 +65,18 @@ const DEFAULTS: SyncConfig = {
     stripThinking: true,
   },
   stats: { collect: true, currency: "cny", usdCnyRate: 6.76 },
+  session: {
+    autoName: true,
+    autoNameMax: 32,
+    defaultCheapModel: true,
+    // 各订阅内成本相对低的模型（deepseek 目录价 0.14/0.28 vs pro 0.435/0.87；
+    // openai-codex 目录价 gpt-5.6-luna 0.2/1.2 最便宜；zai-coding-cn 套餐内 glm-4.7 相对最低）
+    cheapModelByProvider: {
+      deepseek: "deepseek-v4-flash",
+      "zai-coding-cn": "glm-4.7",
+      "openai-codex": "gpt-5.6-luna",
+    },
+  },
 };
 
 export function agentDir(): string {
@@ -124,6 +146,7 @@ export function saveConfig(cfg: SyncConfig): void {
     server: cfg.server,
     sync: cfg.sync,
     stats: cfg.stats,
+    session: cfg.session,
   };
   if (cfg.legacy) Object.assign(out, cfg.legacy);
   writeFileSync(configPath(), JSON.stringify(out, null, 2) + "\n", "utf8");
