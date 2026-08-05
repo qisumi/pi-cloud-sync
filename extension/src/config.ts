@@ -61,7 +61,8 @@ export function statePath(): string {
 
 function deepMerge(base: unknown, patch: unknown): unknown {
   if (patch === null || patch === undefined) return base;
-  if (typeof base === "object" && typeof patch === "object" && !Array.isArray(base) && !Array.isArray(patch)) {
+  // 注意 typeof null === "object"，必须先排除 null
+  if (base !== null && typeof base === "object" && typeof patch === "object" && !Array.isArray(base) && !Array.isArray(patch)) {
     const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
     for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
       out[k] = deepMerge((base as Record<string, unknown>)[k], v);
