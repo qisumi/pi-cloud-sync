@@ -1,0 +1,7 @@
+# =======================
+# pi-cloud-sync 云同步服务器 pisync.qisumi.cn
+# =======================
+pisync.qisumi.cn {
+        import cors_common
+        reverse_proxy localhost:8787
+}

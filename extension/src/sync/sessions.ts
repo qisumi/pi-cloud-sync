@@ -111,18 +111,70 @@ function parseSessionFile(path: string): LocalSession | null {
   }
 }
 
-/** 构建需要推送的会话增量 */
+/**
+ * 上传前剥离敏感/大体积内容（本地文件保持完整，仅同步副本精简）：
+ * - toolResult：工具输出替换为占位（减轻服务器存储与传输负担）
+ * - assistant：移除 thinking 思考块
+ * - compaction retainedTail：同样清理
+ */
+export function sanitizeEntryLine(
+  line: string,
+  opts: { stripToolOutputs: boolean; stripThinking: boolean },
+): string {
+  try {
+    const obj = JSON.parse(line) as Record<string, unknown>;
+    if (obj.type === "message" && obj.message && typeof obj.message === "object") {
+      const m = obj.message as Record<string, unknown>;
+      if (m.role === "toolResult" && opts.stripToolOutputs) {
+        m.content = [{ type: "text", text: "[tool output omitted — 工具输出未同步]" }];
+        if (m.details && typeof m.details === "object") {
+          const d = m.details as Record<string, unknown>;
+          if (typeof d.output === "string") d.output = "[omitted]";
+          if (typeof d.error === "string") d.error = "[omitted]";
+          if (typeof d.input === "string" && d.input.length > 200) d.input = d.input.slice(0, 200) + "…";
+        }
+      }
+      if (m.role === "assistant" && opts.stripThinking && Array.isArray(m.content)) {
+        m.content = (m.content as Array<{ type?: string }>).filter((b) => b.type !== "thinking");
+      }
+    }
+    if (obj.type === "compaction" && Array.isArray(obj.retainedTail)) {
+      obj.retainedTail = (obj.retainedTail as Array<Record<string, unknown>>).map((msg) => {
+        if (msg.role === "toolResult" && opts.stripToolOutputs) {
+          msg.content = [{ type: "text", text: "[tool output omitted — 工具输出未同步]" }];
+        }
+        if (msg.role === "assistant" && opts.stripThinking && Array.isArray(msg.content)) {
+          msg.content = (msg.content as Array<{ type?: string }>).filter((b) => b.type !== "thinking");
+        }
+        return msg;
+      });
+    }
+    return JSON.stringify(obj);
+  } catch {
+    return line; // 解析失败原样推送
+  }
+}
+
+/** 构建需要推送的会话增量（上传前剥离工具输出与思考过程） */
 export function buildSessionChanges(
   sessions: LocalSession[],
   state: SyncState,
-  _cfg: SyncConfig,
+  cfg: SyncConfig,
 ): SessionChange[] {
   const changes: SessionChange[] = [];
   for (const s of sessions) {
     ensureSessionState(state, s.uuid);
     const st = state.sessions[s.uuid];
     const pushed = new Set(st.pushed);
-    const newEntries = s.entries.filter((e) => !pushed.has(e.id));
+    const newEntries = s.entries
+      .filter((e) => !pushed.has(e.id))
+      .map((e) => ({
+        ...e,
+        lineJson: sanitizeEntryLine(e.lineJson, {
+          stripToolOutputs: cfg.sync.stripToolOutputs ?? true,
+          stripThinking: cfg.sync.stripThinking ?? true,
+        }),
+      }));
     if (newEntries.length === 0 && st.serverVersion === 0) continue;
 
     changes.push({

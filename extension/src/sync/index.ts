@@ -174,7 +174,13 @@ export async function pull(
   }
 
   try {
-    const res = await client.pull({ since: null });
+    const res = await client.pull(
+      {
+        since: state.lastPullAt ?? null,
+        includeSessions: cfg.sync.scopes.sessions,
+      },
+      { timeoutMs: 120_000 },
+    );
     report.serverTime = res.serverTime;
 
     for (const obj of res.objects) {

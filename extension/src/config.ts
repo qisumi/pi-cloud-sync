@@ -23,6 +23,10 @@ export interface SyncConfig {
     includeConfigs: string[];
     autoInstallPackages: boolean;
     pruneTombstonesAfterDays: number;
+    /** 不同步工具输出（上传时占位，本地文件保持完整） */
+    stripToolOutputs: boolean;
+    /** 不同步思考过程（上传时移除 thinking 块） */
+    stripThinking: boolean;
   };
   stats: {
     collect: boolean;
@@ -43,6 +47,8 @@ const DEFAULTS: SyncConfig = {
     includeConfigs: ["settings.json", "keybindings.json", "models.json", "auth.json"],
     autoInstallPackages: true,
     pruneTombstonesAfterDays: 30,
+    stripToolOutputs: true,
+    stripThinking: true,
   },
   stats: { collect: true },
 };

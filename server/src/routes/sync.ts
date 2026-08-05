@@ -84,6 +84,7 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
   app.post<{ Body: PullRequest }>("/api/v1/sync/pull", async (req) => {
     const body = req.body ?? {};
     const since = body.since ?? null;
+    const includeSessions = body.includeSessions ?? false;
 
     let rows;
     if (since) {
@@ -147,7 +148,7 @@ export function registerSyncRoutes(app: FastifyInstance, dbs: SyncDb, cfg: Serve
       });
     }
 
-    const sessions = pullSessions(dbs, since);
+    const sessions = includeSessions ? pullSessions(dbs, since) : [];
     const packageManifest = objects.find((o) => o.key === "plugin/package-manifest") ?? null;
 
     return { ok: true, data: { objects, sessions, packageManifest, serverTime: now() } };

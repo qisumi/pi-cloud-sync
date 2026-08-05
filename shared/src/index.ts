@@ -157,6 +157,8 @@ export interface PullRequest {
   since?: number | null;
   /** 需要的对象 key 列表（null=全部） */
   keys?: string[] | null;
+  /** 是否返回会话（默认 false，避免全量会话拖慢响应） */
+  includeSessions?: boolean;
 }
 
 /** 拉取响应 */

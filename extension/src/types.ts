@@ -104,6 +104,7 @@ export interface SessionSnapshot {
 export interface PullRequest {
   since?: number | null;
   keys?: string[] | null;
+  includeSessions?: boolean;
 }
 
 export interface PullResponse {

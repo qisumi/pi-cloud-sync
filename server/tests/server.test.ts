@@ -615,3 +615,56 @@ test("auth.json smart merge: oauth later expires wins", async (t) => {
   const merged2 = JSON.parse(Buffer.from(pushB2Json.data.objects[0].contentB64, "base64").toString("utf8"));
   assert.equal(merged2.codex.access, "a2");
 });
+
+
+test("pull honors includeSessions flag (server load reduction)", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  // 推送一个会话
+  await fetch(`${ctx.base}/api/v1/sessions/push`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({
+      sessions: [{
+        uuid: "inc-sess",
+        cwd: "/p",
+        baseVersion: 0,
+        entries: [{
+          id: "e1",
+          parentId: null,
+          lineJson: JSON.stringify({ type: "message", id: "e1", parentId: null, timestamp: "2024-01-01T00:00:00.000Z", message: { role: "user", content: "x" } }),
+        }],
+        mtime: 1,
+      }],
+    }),
+  });
+
+  // includeSessions=false → 不返回会话
+  const pull1 = await fetch(`${ctx.base}/api/v1/sync/pull`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ includeSessions: false }),
+  });
+  const j1 = (await pull1.json()) as { data: { sessions: unknown[] } };
+  assert.equal(j1.data.sessions.length, 0);
+
+  // includeSessions=true → 返回会话
+  const pull2 = await fetch(`${ctx.base}/api/v1/sync/pull`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ includeSessions: true }),
+  });
+  const j2 = (await pull2.json()) as { data: { sessions: Array<{ uuid: string }> } };
+  assert.equal(j2.data.sessions.length, 1);
+  assert.equal(j2.data.sessions[0].uuid, "inc-sess");
+
+  // since 增量：只返回之后更新的
+  const pull3 = await fetch(`${ctx.base}/api/v1/sync/pull`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ includeSessions: true, since: Date.now() }),
+  });
+  const j3 = (await pull3.json()) as { data: { sessions: unknown[] } };
+  assert.equal(j3.data.sessions.length, 0);
+});

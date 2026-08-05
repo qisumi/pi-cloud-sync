@@ -49,13 +49,14 @@ export class SyncClient {
     method: string,
     path: string,
     body?: unknown,
+    opts?: { timeoutMs?: number },
   ): Promise<T> {
     if (!this.cfg.server?.url) throw new ApiError("server not configured", 0);
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: this.headers(),
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000),
     });
     let json: ApiEnvelope<T> | null = null;
     try {
@@ -81,8 +82,8 @@ export class SyncClient {
     return this.request<PushResponse>("POST", "/api/v1/sync/push", { changes });
   }
 
-  async pull(body: PullRequest): Promise<PullResponse> {
-    return this.request<PullResponse>("POST", "/api/v1/sync/pull", body);
+  async pull(body: PullRequest, opts?: { timeoutMs?: number }): Promise<PullResponse> {
+    return this.request<PullResponse>("POST", "/api/v1/sync/pull", body, opts);
   }
 
   async pushSessions(sessions: SessionChange[]): Promise<PushResponse["sessions"]> {

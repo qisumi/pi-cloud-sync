@@ -290,3 +290,71 @@ test("config: v3 -> v4 migration adds auth.json once", () => {
   const reread = JSON.parse(readFileSync(join(dir, "pi-sync.json"), "utf8"));
   assert.ok(reread.sync.includeConfigs.includes("auth.json"));
 });
+
+
+test("session: sanitize strips tool output and thinking on push", () => {
+  const dir = tempAgentDir();
+  const cfg = loadConfig();
+  cfg.sync.stripToolOutputs = true;
+  cfg.sync.stripThinking = true;
+  saveConfig(cfg);
+
+  const toolEntry = JSON.stringify({
+    type: "message", id: "t1", parentId: null, timestamp: "2024-01-01T00:00:00.000Z",
+    message: { role: "toolResult", toolCallId: "c1", toolName: "bash",
+      content: [{ type: "text", text: "HUGE OUTPUT ".repeat(100) }],
+      details: { output: "huge".repeat(500), exitCode: 0, fullOutputPath: "/tmp/x" }, isError: false },
+  });
+  const thinkEntry = JSON.stringify({
+    type: "message", id: "a1", parentId: "t1", timestamp: "2024-01-01T00:00:01.000Z",
+    message: { role: "assistant", provider: "deepseek", model: "deepseek-v4",
+      content: [{ type: "thinking", thinking: "secret reasoning ".repeat(50) },
+                { type: "text", text: "final answer" }],
+      usage: { input: 10, output: 5, totalTokens: 15 } },
+  });
+  const textEntry = JSON.stringify({
+    type: "message", id: "u1", parentId: "a1", timestamp: "2024-01-01T00:00:02.000Z",
+    message: { role: "user", content: "hello" },
+  });
+
+  // 本地文件保持完整
+  const cwd = "/proj";
+  const sessionDir = join(dir, "sessions", encodeCwdPath(cwd));
+  mkdirSync(sessionDir, { recursive: true });
+  const uuid = "sanitize-test";
+  write(join(sessionDir, `1_${uuid}.jsonl`),
+    JSON.stringify({ type: "session", version: 3, id: uuid, timestamp: "2024-01-01T00:00:00.000Z", cwd }) + "\n" +
+    toolEntry + "\n" + thinkEntry + "\n" + textEntry + "\n");
+
+  const state = loadState();
+  const changes = buildSessionChanges(scanLocalSessions(), state, cfg);
+  assert.equal(changes.length, 1);
+  const lines = changes[0].entries.map((e) => JSON.parse(e.lineJson));
+
+  const tool = lines.find((l) => l.id === "t1").message;
+  assert.equal(tool.content[0].text, "[tool output omitted — 工具输出未同步]");
+  assert.equal(tool.details.output, "[omitted]");
+  assert.ok(tool.details.fullOutputPath, "fullOutputPath 保留");
+
+  const assistant = lines.find((l) => l.id === "a1").message;
+  assert.ok(!assistant.content.some((b) => b.type === "thinking"), "thinking 已剥离");
+  assert.equal(assistant.content.length, 1);
+  assert.equal(assistant.content[0].text, "final answer");
+  assert.equal(assistant.model, "deepseek-v4");
+
+  const user = lines.find((l) => l.id === "u1").message;
+  assert.equal(user.content, "hello");
+
+  // 本地文件仍是完整内容
+  const local = scanLocalSessions()[0];
+  assert.ok(local.entries.find((e) => e.id === "t1").lineJson.includes("HUGE OUTPUT"));
+  assert.ok(local.entries.find((e) => e.id === "a1").lineJson.includes("secret reasoning"));
+
+  // 关闭剥离 → 原样
+  const cfg2 = loadConfig();
+  cfg2.sync.stripToolOutputs = false;
+  cfg2.sync.stripThinking = false;
+  const changes2 = buildSessionChanges(scanLocalSessions(), loadState(), cfg2);
+  const rawTool = JSON.parse(changes2[0].entries.find((e) => JSON.parse(e.lineJson).id === "t1").lineJson);
+  assert.ok(rawTool.message.content[0].text.includes("HUGE OUTPUT"));
+});
