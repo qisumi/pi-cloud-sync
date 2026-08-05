@@ -9,8 +9,14 @@ import type { QuotaMeter } from "./quota/types.js";
  * 命令输出助手：
  * - TUI 模式：短文本走 notify toast；长文本用 SelectList 对话框展示（↑↓ 滚动，Esc 关闭）。
  * - print/json/rpc 模式：直接 console.log（可被脚本捕获）。
+ * - static=true 时：TUI 用非交互静态面板直接展示全部内容（Esc 关闭，不要求选中）。
  */
-export async function output(ctx: ExtensionCommandContext, text: string, title = "pi-cloud-sync"): Promise<void> {
+export async function output(
+  ctx: ExtensionCommandContext,
+  text: string,
+  title = "pi-cloud-sync",
+  opts?: { static?: boolean },
+): Promise<void> {
   if (!ctx.hasUI || ctx.mode !== "tui") {
     console.log(text);
     return;
@@ -19,6 +25,11 @@ export async function output(ctx: ExtensionCommandContext, text: string, title =
   const lines = text.split("\n");
   if (lines.length <= 6) {
     ctx.ui.notify(lines.filter(Boolean).join(" | "), "info");
+    return;
+  }
+
+  if (opts?.static) {
+    await showTextPane(ctx, title, lines);
     return;
   }
 
@@ -57,6 +68,34 @@ export async function output(ctx: ExtensionCommandContext, text: string, title =
   });
 }
 
+/** 非交互静态文本面板：一次展示全部内容，Esc/Enter 关闭 */
+async function showTextPane(ctx: ExtensionCommandContext, title: string, lines: string[]): Promise<void> {
+  const max = 50; // 上限保护：超出部分折叠为提示行
+  const visible = lines.length > max ? [...lines.slice(0, max), `… 还有 ${lines.length - max} 行（完整内容请用 --save=file）`] : lines;
+  await ctx.ui.custom<null>((tui, theme, _kb, done) => {
+    const container = new Container();
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+    visible.forEach((row, i) => {
+      container.addChild(new Text(row, 1, i + 1));
+    });
+    container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
+    container.addChild(new Text(theme.fg("dim", " Esc/Enter 关闭"), 1, visible.length + 1));
+
+    return {
+      render: (w) => container.render(w),
+      invalidate: () => container.invalidate(),
+      handleInput: (data) => {
+        if (_kb.matches(data, "tui.select.cancel") || _kb.matches(data, "tui.select.confirm")) {
+          done(null);
+          return;
+        }
+        tui.requestRender();
+      },
+    };
+  });
+}
+
 /** 对话框类交互：确认对话框封装 */
 export async function confirm(ctx: ExtensionCommandContext, title: string, message: string): Promise<boolean> {
   if (!ctx.hasUI) return true;
@@ -77,13 +116,6 @@ function barWidth(theme: unknown, usedPct: number | null, width = 20): string {
   const color = usedPct >= 90 ? "error" : usedPct >= 70 ? "warning" : "success";
   const filled = Math.min(width, Math.max(0, Math.round((usedPct / 100) * width)));
   return th.fg(color, "█".repeat(filled)) + th.fg("dim", "░".repeat(width - filled));
-}
-
-function fmtQuotaReset(resetsAt: number | null): string {
-  if (!resetsAt) return "";
-  const d = new Date(resetsAt);
-  const pad = (x: number) => String(x).padStart(2, "0");
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function fmtQuotaNum(n: number | null): string {
@@ -107,24 +139,30 @@ function fmtQuotaLeft(resetsAt: number | null): string {
 
 /** 渲染一个额度计量行（含进度条） */
 function meterRow(theme: { fg: (color: string, s: string) => string }, m: QuotaMeter): string {
-  const head = padTo(m.label, 9);
   if (m.id === "deepseek.balance") {
     const v = m.current ?? 0;
     const icon = m.status === "critical" ? "⚠" : m.status === "warn" ? "▲" : "●";
     const color = m.status === "critical" ? "error" : m.status === "warn" ? "warning" : "success";
-    return `  ${head}${theme.fg(color, `${icon} ${m.unit}${v.toFixed(2)}`)}${theme.fg("dim", "  余额")}`;
+    return `${theme.fg(color, `${icon} ${m.unit}${v.toFixed(2)}`)}${theme.fg("dim", " 余额")}`;
   }
-  if (m.usedPct == null) return `  ${head}${theme.fg("dim", "--")}`;
+  if (m.usedPct == null) return theme.fg("dim", "--");
   const tokens =
-    m.current != null && m.limit != null ? ` (${fmtQuotaNum(m.current)}/${fmtQuotaNum(m.limit)})` : "";
+    m.current != null && m.limit != null ? ` ${fmtQuotaNum(m.current)}/${fmtQuotaNum(m.limit)}` : "";
   const left = m.usedPct >= 90 ? "0" : Math.max(0, 100 - m.usedPct).toFixed(0);
   const leftColor = m.usedPct >= 90 ? "error" : m.usedPct >= 70 ? "warning" : "text";
   return (
-    `  ${head}${barWidth(theme, m.usedPct)} ` +
+    `${barWidth(theme, m.usedPct)} ` +
     theme.fg(leftColor, `剩 ${left}%`) +
-    theme.fg("dim", `${tokens}${fmtQuotaLeft(m.resetsAt)}`) +
-    (m.resetsAt ? ` (${fmtQuotaReset(m.resetsAt)})` : "")
+    theme.fg("dim", `${tokens}${fmtQuotaLeft(m.resetsAt)}`)
   );
+}
+
+/** 计量器短标签（深色/紧凑显示用） */
+function shortLabel(m: QuotaMeter): string {
+  if (m.id === "deepseek.balance") return "余额";
+  if (m.id.endsWith(".fiveHour")) return "5h";
+  if (m.id.endsWith(".weekly")) return "周";
+  return m.label;
 }
 
 /**
@@ -139,36 +177,52 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
 
     const th = theme as unknown as { fg: (color: string, s: string) => string };
     const rows: string[] = [];
-    rows.push(theme.fg("accent", theme.bold(" 额度探测 Quota")));
+    const ts = new Date(report.ts);
+    const pad2 = (x: number) => String(x).padStart(2, "0");
+    rows.push(
+      theme.fg(
+        "accent",
+        ` 额度 Quota · ${ts.getMonth() + 1}月${ts.getDate()}日 ${pad2(ts.getHours())}:${pad2(ts.getMinutes())}`,
+      ),
+    );
+
+    // 渠道名列宽（CJK 双宽）
+    const visLen = (s: string) => [...s].reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
+    const provPad = Math.max(0, ...report.providers.map((p) => visLen(p.label))) + 2;
+    const blank = " ".repeat(provPad);
+    const meterPad = Math.max(0, ...report.providers.map((p) => p.meters.map((m) => visLen(shortLabel(m))).reduce((a, b) => Math.max(a, b), 0))) + 1;
 
     for (const p of report.providers) {
-      rows.push("");
       if (!p.configured) {
-        rows.push(theme.fg("dim", ` ${p.label}  ✕ ${p.error ?? "未配置"}`));
+        rows.push(theme.fg("dim", ` ${p.label.padEnd(provPad)} ✕ ${p.error ?? "未配置"}`));
         continue;
       }
       if (!p.ok) {
-        rows.push(theme.fg("warning", ` ${p.label}  ✕ ${p.error ?? "探测失败"}`));
+        rows.push(theme.fg("warning", ` ${p.label.padEnd(provPad)} ✕ ${p.error ?? "探测失败"}`));
         continue;
       }
-      rows.push(theme.fg("text", ` ${p.label}`));
-      for (const m of p.meters) rows.push(meterRow(th, m));
+      p.meters.forEach((m, i) => {
+        const head = i === 0 ? ` ${p.label.padEnd(provPad)}` : ` ${blank}`;
+        rows.push(`${head}${theme.fg("dim", padTo(shortLabel(m), meterPad))}${meterRow(th, m)}`);
+      });
     }
 
-    // 对比上次
+    // 对比上次（单行）
     const deltas = computeDeltas(toSnapshot(report.providers, report.ts), report.prev);
     const comps: string[] = [];
     if (deltas.deepseekSpent != null && deltas.deepseekSpent > 0) {
       comps.push(`DeepSeek 消耗 ${deltas.deepseekSpent.toFixed(2)}`);
     }
     if (deltas.zaiFiveHourDelta != null && deltas.zaiFiveHourDelta > 0) {
-      comps.push(`Z.AI 5h +${deltas.zaiFiveHourDelta.toFixed(1)}%`);
+      comps.push(`Z.AI 5h +${deltas.zaiFiveHourDelta.toFixed(0)}%`);
+    }
+    if (deltas.zaiWeeklyDelta != null && deltas.zaiWeeklyDelta > 0) {
+      comps.push(`Z.AI 周 +${deltas.zaiWeeklyDelta.toFixed(0)}%`);
     }
     if (deltas.codexWeeklyDelta != null && deltas.codexWeeklyDelta > 0) {
-      comps.push(`Codex 周 +${deltas.codexWeeklyDelta.toFixed(1)}%`);
+      comps.push(`Codex 周 +${deltas.codexWeeklyDelta.toFixed(0)}%`);
     }
     if (comps.length > 0) {
-      rows.push("");
       rows.push(theme.fg("muted", ` 对比上次: ${comps.join(" · ")}`));
     }
 

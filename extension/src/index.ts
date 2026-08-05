@@ -270,6 +270,8 @@ async function cmdSyncConfig(rest: string[], ctx: ExtensionCommandContext): Prom
       `sync.includeConfigs: ${JSON.stringify(cfg.sync.includeConfigs)}`,
       `sync.autoInstallPackages: ${cfg.sync.autoInstallPackages}`,
       `stats.collect: ${cfg.stats.collect}`,
+      `stats.currency: ${cfg.stats.currency}  (--cny/--usd 可临时切换)`,
+      `stats.usdCnyRate: ${cfg.stats.usdCnyRate}`,
     ].join("\n");
   }
 
@@ -342,16 +344,24 @@ function setConfigPath(cfg: SyncConfig, key: string, value: string): SyncConfig 
 async function cmdUsage(args: string, ctx: ExtensionCommandContext): Promise<string> {
   const parts = args.trim().split(/\s+/).filter(Boolean);
   let format: "table" | "json" | "csv" | "markdown" = "table";
-  let days: number | null = null;
+  // 默认近 7 天；all/full 可看全部
+  let days: number | null = 7;
   let top = 10;
   let saveTo: string | null = null;
   let currentSession = false;
+  let fullView = false;
+  // 价格显示货币：默认取配置（cny=¥），可用 --cny / --usd 临时切换
+  let currency: "usd" | "cny" = cfg.stats?.currency ?? "cny";
+  let rate = cfg.stats?.usdCnyRate ?? 7.15;
 
   for (const p of parts) {
     if (p === "today") days = 1;
     else if (p === "7d" || p === "week") days = 7;
     else if (p === "30d" || p === "month") days = 30;
     else if (p === "all") days = null;
+    else if (p === "full" || p === "--full") fullView = true;
+    else if (p === "--cny") currency = "cny";
+    else if (p === "--usd") currency = "usd";
     else if (p === "--json") format = "json";
     else if (p === "--csv") format = "csv";
     else if (p === "--md" || p === "--markdown") format = "markdown";
@@ -374,15 +384,17 @@ async function cmdUsage(args: string, ctx: ExtensionCommandContext): Promise<str
 
   progress?.done();
 
+  const opts = { currency, usdCnyRate: rate, view: fullView ? ("full" as const) : ("compact" as const), days };
+
   if (currentSession) {
-    return formatSessionSummary(ctx.sessionManager.getSessionId() ?? "session", report);
+    return formatSessionSummary(ctx.sessionManager.getSessionId() ?? "session", report, opts);
   }
 
   let outputText: string;
   if (format === "csv") {
     outputText = formatReport(report, "csv");
   } else {
-    outputText = formatReport(report, format);
+    outputText = formatReport(report, format, opts);
   }
 
   if (saveTo) {
@@ -533,10 +545,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("usage", {
-    description: "用量统计：[today|7d|30d|all|Nd] [current] [--json|--csv|--md] [--save=file] [--top=N] [live]",
+    description: "用量统计：[today|7d|30d|all|Nd] [current|full] [--cny|--usd] [--json|--csv|--md] [--save=file] [--top=N] [live]  （默认近7天：按天+按模型两表）",
     handler: async (args, ctx) => {
       const result = await cmdUsage(args ?? "", ctx);
-      await output(ctx, result, "usage");
+      await output(ctx, result, "用量统计 Usage", { static: true });
     },
   });
 

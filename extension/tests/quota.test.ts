@@ -287,6 +287,9 @@ test("quota: codex failure allowed in orchestration (does not break others)", as
   const text = formatQuotaText(r);
   assert.match(text, /DeepSeek/);
   assert.match(text, /Codex/);
+  // 紧凑展示：一屏可看完（每渠道一行，无渠道分隔空行）
+  assert.ok(text.split("\n").length <= 6, `quota 文本应紧凑，实际 ${text.split("\n").length} 行`);
+  assert.ok(!text.includes("─ "), "不应有渠道分隔行");
   const summary = quotaSummary(r);
   assert.match(summary, /余额/);
 });

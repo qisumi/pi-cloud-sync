@@ -30,6 +30,10 @@ export interface SyncConfig {
   };
   stats: {
     collect: boolean;
+    /** 价格显示货币：usd=$ / cny=¥（默认） */
+    currency: "usd" | "cny";
+    /** USD→CNY 汇率（currency=cny 时用于换算显示） */
+    usdCnyRate: number;
   };
   /** 兼容旧版字段（WebDAV 等），保留不动 */
   legacy?: Record<string, unknown>;
@@ -50,7 +54,7 @@ const DEFAULTS: SyncConfig = {
     stripToolOutputs: true,
     stripThinking: true,
   },
-  stats: { collect: true },
+  stats: { collect: true, currency: "cny", usdCnyRate: 7.15 },
 };
 
 export function agentDir(): string {

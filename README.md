@@ -161,15 +161,38 @@ pi -e ./extension/src/index.ts
 
 ## 📊 Usage Statistics / 用量统计
 
+默认直接展示**两张表**（近 7 天：分日 + 分模型），非交互直接输出；价格默认人民币 ¥（`stats.currency`，可 `--cny` / `--usd` 临时切换，汇率 `stats.usdCnyRate`）。
+
 ```bash
-/usage                # 汇总：按天 / 按模型 / 按会话 Top
-/usage 7d             # 近 7 天
+/usage                # 默认：近 7 天 · 分日 + 分模型两表 · 非交互直接展示
+/usage full           # 完整视图：概要 + 按天 + 按模型 + 按会话 Top
 /usage current        # 当前会话明细
+/usage 30d            # 近 30 天（today / 7d / 30d / all / Nd）
+/usage --cny          # 人民币 ¥ 显示（默认）  /usage --usd 美元 $ 显示
 /usage --json         # JSON 导出
 /usage --csv          # CSV 导出
 /usage --md           # Markdown 导出
 /usage --save=report.md --top=20
 /usage live           # 开关实时采集
+```
+
+```
+═══ 用量统计 Usage (近 7 天) ═══
+─ 按天 By Day ─
+------------+--------+--------+--------+--------+--------+-------+-----
+ Label      | Input  | Output | CacheR | CacheW | Total  | Cost  | Req
+------------+--------+--------+--------+--------+--------+-------+-----
+ 2026-08-04 | 181.0k |  90.0k |  25.0k |   1.5k | 296.5k | ¥6.94 |   5
+ 2026-08-05 | 180.0k |  90.0k |  25.0k |   1.5k | 296.5k | ¥6.58 |   5
+------------+--------+--------+--------+--------+--------+-------+-----
+
+─ 按模型 By Model ─
+---------+--------+--------+--------+--------+--------+--------+-----
+ Label   | Input  | Output | CacheR | CacheW | Total  | Cost   | Req
+---------+--------+--------+--------+--------+--------+--------+-----
+ glm-4.6 | 721.0k | 350.0k | 140.0k |   7.0k |  1.20M |  ¥1.15 |  21
+ gpt-4o  | 560.0k | 280.0k |  35.0k |   3.5k | 878.5k | ¥52.55 |  14
+---------+--------+--------+--------+--------+--------+--------+-----
 ```
 
 ---
@@ -192,18 +215,15 @@ pi -e ./extension/src/index.ts
 | **Z.AI 智谱 GLM Coding Plan** | 5 小时额度 + 周额度（tokens） | auth.json 的 `zai` / `zai-coding-cn` / `z-ai` / `zhipu` / `glm` 等（默认优先），或 `ZAI_CODING_CN_API_KEY` / `ZAI_API_KEY` / `ZHIPU_API_KEY` / `GLM_API_KEY` | 中国区 `open.bigmodel.cn`，全球区可用 `ZAI_BASE_URL` 覆盖 |
 | **Codex（OpenAI 订阅）** | 5 小时 + 周额度（% + 重置时间） | `~/.codex/auth.json`（`codex login` 生成） | 访问 ChatGPT 失败（如无 VPN）时**仅标记不可用，不影响其他渠道** |
 
-> 额度面板示例（TUI）：
+> 额度面板示例（TUI，紧凑单屏）：
 >
 > ```
-> 额度探测 Quota
->  DeepSeek
->   账户余额     ● ¥65.96  余额
->  Z.AI GLM 编程套餐
->   5 小时额度  ████████░░ 剩 60% (3.2M/8M) · 1 小时 20 分后重置
->   周额度      ██████████ 剩 38% · 3 天 2 小时后重置
->  Codex (OpenAI 订阅)
->   周额度      ████░░░░░░ 剩 45% · 8月6日 12:00 重置
->  对比上次: DeepSeek 消耗 1.70 · Z.AI 5h +5%
+> 额度 Quota · 8月5日 23:26
+>  DeepSeek              ● 余额 ¥65.96
+>  Z.AI GLM 编程套餐      ████░░░░░░ 剩 60% 3.20M/8.00M · 1时10分后重置
+>                        ██████░░░░ 剩 38% 5.00M/8.00M · 3天后重置
+>  Codex (OpenAI 订阅)   ✕ network error
+>  对比上次: Z.AI 5h +5%
 > ```
 
 ---
@@ -222,7 +242,8 @@ pi -e ./extension/src/index.ts
 ```
 
 数据双通道：**实时采集**（消息事件 → `~/.pi/agent/pi-stats.jsonl`，会话清理后仍完整）
-+ **会话扫描**（解析历史 `.jsonl` 补齐，自动去重）。费用直接采用 pi 计算的成本。
++ **会话扫描**（解析历史 `.jsonl` 补齐，自动去重）。费用直接采用 pi 计算的成本（USD），
+显示时按 `stats.usdCnyRate`（默认 7.15）换算为人民币 ¥，可用 `--usd` 查看美元原值。
 
 ---
 

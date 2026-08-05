@@ -172,6 +172,27 @@ test("stats: collector dedupe + analyzer aggregation", () => {
   // 格式化不抛异常
   const text = formatReport(report);
   assert.ok(text.includes("Total"));
+
+  // compact 视图（默认）：只有 按天 + 按模型 两张表，不含按会话
+  const compact = formatReport(report, "table", { days: 7 });
+  assert.ok(compact.includes("近 7 天"));
+  assert.ok(compact.includes("按天 By Day"));
+  assert.ok(compact.includes("按模型 By Model"));
+  assert.ok(!compact.includes("按会话"));
+  assert.ok(!compact.includes("总 Token"));
+
+  // full 视图：恢复概要 + 按会话
+  const full = formatReport(report, "table", { view: "full" });
+  assert.ok(full.includes("总 Token"));
+  assert.ok(full.includes("按会话"));
+
+  // CNY 默认显示 ¥，并可按汇率换算
+  const cny = formatReport(report, "table", { currency: "cny", usdCnyRate: 7.15 });
+  assert.ok(cny.includes("¥"));
+  assert.ok(!cny.includes("$"));
+  const usd = formatReport(report, "table", { currency: "usd" });
+  assert.ok(usd.includes("$"));
+  assert.ok(!usd.includes("¥"));
 });
 
 test("stats: session scan produces records", () => {
