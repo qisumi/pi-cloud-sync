@@ -115,4 +115,5 @@ const padVisible = (s: string, w: number) => s + " ".repeat(Math.max(0, w - visL
   - 图标尺寸用 CSS 控制（`svg.lucide { width: 1em; height: 1em }` + 各容器单独尺寸）。
 - 货币：**默认人民币 ¥**（`fmtCost`），顶部 topbar 的 `currencySelect` 可切 USD；汇率来自 `open.er-api.com`（localStorage 6h 缓存，失败保留旧缓存）；**fallback 用构建时从 API 获取的真实汇率（`USD_CNY_FALLBACK`），不要写死 7.15**。
 - 模型/设备分布条（`.bar-row`）是纯展示，无点击筛选交互；如需筛选用顶部 `deviceSelect` / `modelSelect`。
+- 会话浏览页：消息正文超长用滚动条（`.message-body { overflow: auto }`）而不是截断遮罩；连续的助手消息会合并为一张卡片（虚线分隔正文、用量/时间汇总、整体展开/复制），仅在无筛选/无搜索时合并；`.bar-track`/`.bar-fill` 必须 `display: block`（span 默认 inline 会使宽高失效，分布条不显示）。
 - 新增 CDN 依赖与 chart.js / marked / dompurify / lucide 并列在 head，版本号固定（不用 latest）。

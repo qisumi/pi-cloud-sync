@@ -367,8 +367,8 @@
     color: inherit;
   }
   .bar-label { overflow: hidden; color: var(--text-soft); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; transition: color .15s; }
-  .bar-track { height: 9px; overflow: hidden; border-radius: 999px; background: var(--bg-soft); }
-  .bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand-strong), var(--brand)); transform-origin: left; animation: grow .45s ease-out; }
+  .bar-track { display: block; height: 9px; overflow: hidden; border-radius: 999px; background: var(--bg-soft); }
+  .bar-fill { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand-strong), var(--brand)); transform-origin: left; animation: grow .45s ease-out; }
   .bar-fill.violet { background: linear-gradient(90deg, #7764cb, var(--violet)); }
   @keyframes grow { from { transform: scaleX(0); } }
   .bar-value { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; text-align: right; }
@@ -450,16 +450,13 @@
   .message-head-spacer { flex: 1; }
   .message-actions { display: flex; gap: 5px; }
   .message-body {
-    position: relative; max-height: 300px; overflow: hidden; margin: 0; padding: 14px 15px 19px;
+    position: relative; max-height: 300px; overflow: auto; margin: 0; padding: 14px 15px 19px;
     color: var(--text-soft); font: 13px/1.75 Inter, "Microsoft YaHei", system-ui, sans-serif;
     overflow-wrap: anywhere;
   }
-  .message.collapsible:not(.expanded) .message-body::after {
-    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 70px;
-    background: linear-gradient(transparent, var(--surface));
-  }
-  .message.expanded .message-body { max-height: none; }
+  .message.expanded .message-body { max-height: none; overflow: visible; }
   .message-expand { display: block; margin: -7px auto 10px; }
+  .merge-divider { margin: 15px 0; border: 0; border-top: 1px dashed var(--border-strong); }
   .message-empty { color: var(--faint); font-style: italic; }
   .markdown-body > :first-child { margin-top: 0; }
   .markdown-body > :last-child { margin-bottom: 0; }
@@ -1736,6 +1733,57 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  /** 单条消息卡片 */
+  function renderMessageCard(item) {
+    var entry = item.entry;
+    var kind = roleKind(entry);
+    var body = entry.text || '';
+    var usage = entry.usage && (entry.usage.totalTokens || entry.usage.cost) ?
+      '<span class="message-meta">' + fmtFull(entry.usage.totalTokens) + ' tok · ' + fmtCost(entry.usage.cost) + '</span>' : '';
+    var technical = [entry.model, entry.sourceDevice].filter(Boolean).map(esc).join(' · ');
+    var collapsible = body.length > 1200;
+    return '<article class="message ' + kind + (collapsible ? ' collapsible' : '') + '" data-message-index="' + item.index + '">' +
+      '<div class="message-head"><span class="role-chip">' + esc(roleName(entry)) + '</span>' +
+      (technical ? '<span class="message-meta">' + technical + '</span>' : '') + usage +
+      '<span class="message-head-spacer"></span><span class="message-meta">' + esc(entry.ts ? fmtTime(entry.ts) : '') + '</span>' +
+      '<span class="message-actions"><button class="btn small" type="button" data-copy-message="' + item.index + '">复制</button></span></div>' +
+      '<div class="message-body markdown-body' + (!body ? ' message-empty' : '') + '">' + markdownHtml(body || '无文本内容') + '</div>' +
+      (collapsible ? '<button class="btn small message-expand" type="button" data-expand-message="' + item.index + '">展开全文</button>' : '') + '</article>';
+  }
+
+  /** 合并连续的助手消息：单头部（模型/用量/时间汇总）+ 多条正文用虚线分隔，整体展开/折叠 */
+  function renderMergedGroup(items) {
+    var totalTokens = 0, totalCost = 0, modelSet = {};
+    items.forEach(function (item) {
+      var entry = item.entry;
+      var u = entry.usage;
+      if (u) { totalTokens += u.totalTokens || 0; totalCost += u.cost || 0; }
+      if (entry.model) modelSet[entry.model] = true;
+    });
+    var usage = (totalTokens || totalCost) ?
+      '<span class="message-meta">' + fmtFull(totalTokens) + ' tok · ' + fmtCost(totalCost) + '</span>' : '';
+    var modelNames = Object.keys(modelSet).join(' · ');
+    var technical = [modelNames, items[0].entry.sourceDevice].filter(Boolean).map(esc).join(' · ');
+    var firstTs = items[0].entry.ts;
+    var lastTs = items[items.length - 1].entry.ts;
+    var timeLabel = !firstTs ? '' : (firstTs === lastTs ? esc(fmtTime(firstTs)) : esc(fmtTime(firstTs)) + ' ~ ' + esc(fmtTime(lastTs)));
+    var combined = items.map(function (item) { return item.entry.text || ''; }).join('');
+    var collapsible = combined.length > 1200;
+    var indexList = items.map(function (item) { return item.index; }).join(',');
+    return '<article class="message assistant merged' + (collapsible ? ' collapsible' : '') + '" data-message-index="' + indexList + '">' +
+      '<div class="message-head"><span class="role-chip">助手</span>' +
+      (technical ? '<span class="message-meta">' + technical + '</span>' : '') + usage +
+      '<span class="message-head-spacer"></span><span class="message-meta">' + timeLabel + '</span>' +
+      '<span class="message-actions"><button class="btn small" type="button" data-copy-merged="' + indexList + '">复制</button></span></div>' +
+      '<div class="message-body markdown-body' + (combined ? '' : ' message-empty') + '">' +
+      items.map(function (item, i) {
+        var text = item.entry.text || '';
+        return (i > 0 ? '<hr class="merge-divider">' : '') + markdownHtml(text || '无文本内容');
+      }).join('') +
+      '</div>' +
+      (collapsible ? '<button class="btn small message-expand" type="button" data-expand-message="' + items[0].index + '">展开全文</button>' : '') + '</article>';
+  }
+
   function renderMessages() {
     var detail = S.detail;
     if (!detail) return;
@@ -1755,21 +1803,22 @@ document.addEventListener('DOMContentLoaded', function () {
       $('messageList').innerHTML = '<div class="card empty"><span><span class="empty-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span>' + esc(emptyCopy) + '</span></div>';
       return;
     }
-    $('messageList').innerHTML = rows.map(function (item) {
-      var entry = item.entry;
-      var kind = roleKind(entry);
-      var body = entry.text || '';
-      var usage = entry.usage && (entry.usage.totalTokens || entry.usage.cost) ?
-        '<span class="message-meta">' + fmtFull(entry.usage.totalTokens) + ' tok · ' + fmtCost(entry.usage.cost) + '</span>' : '';
-      var technical = [entry.model, entry.sourceDevice].filter(Boolean).map(esc).join(' · ');
-      var collapsible = body.length > 1200;
-      return '<article class="message ' + kind + (collapsible ? ' collapsible' : '') + '" data-message-index="' + item.index + '">' +
-        '<div class="message-head"><span class="role-chip">' + esc(roleName(entry)) + '</span>' +
-        (technical ? '<span class="message-meta">' + technical + '</span>' : '') + usage +
-        '<span class="message-head-spacer"></span><span class="message-meta">' + esc(entry.ts ? fmtTime(entry.ts) : '') + '</span>' +
-        '<span class="message-actions"><button class="btn small" type="button" data-copy-message="' + item.index + '">复制</button></span></div>' +
-        '<div class="message-body markdown-body' + (!body ? ' message-empty' : '') + '">' + markdownHtml(body || '无文本内容') + '</div>' +
-        (collapsible ? '<button class="btn small message-expand" type="button" data-expand-message="' + item.index + '">展开全文</button>' : '') + '</article>';
+
+    // 无筛选/无搜索时合并连续的助手消息（user 与 tool 消息始终单条），减少同类卡片堆积
+    var groups = [];
+    if (filter || query) {
+      groups = rows.map(function (item) { return { kind: roleKind(item.entry), items: [item] }; });
+    } else {
+      rows.forEach(function (item) {
+        var kind = roleKind(item.entry);
+        var last = groups[groups.length - 1];
+        if (kind === 'assistant' && last && last.kind === 'assistant') last.items.push(item);
+        else groups.push({ kind: kind, items: [item] });
+      });
+    }
+
+    $('messageList').innerHTML = groups.map(function (group) {
+      return group.items.length > 1 ? renderMergedGroup(group.items) : renderMessageCard(group.items[0]);
     }).join('');
     $('messageList').querySelectorAll('.markdown-body a').forEach(function (link) {
       link.target = '_blank';
@@ -2152,6 +2201,15 @@ document.addEventListener('DOMContentLoaded', function () {
   $('messageSearch').oninput = renderMessages;
   $('roleFilter').onchange = renderMessages;
   $('sessionDetailView').addEventListener('click', function (event) {
+    var merged = event.target.closest('[data-copy-merged]');
+    if (merged && S.detail) {
+      var ids = (merged.dataset.copyMerged || '').split(',').map(Number);
+      var text = ids.map(function (id) {
+        return S.detail.entries[id] ? S.detail.entries[id].text || '' : '';
+      }).join('\n\n');
+      copyText(text);
+      return;
+    }
     var copy = event.target.closest('[data-copy-message]');
     if (copy && S.detail) {
       var entry = S.detail.entries[Number(copy.dataset.copyMessage)];
