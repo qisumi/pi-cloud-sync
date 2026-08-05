@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { Container, type Component, type SelectItem, SelectList, Text, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { QuotaReport } from "./quota/index.js";
 import { computeDeltas, toSnapshot } from "./quota/history.js";
 import type { QuotaMeter } from "./quota/types.js";
@@ -78,10 +78,8 @@ async function showTextPane(ctx: ExtensionCommandContext, title: string, lines: 
   await ctx.ui.custom<null>((tui, theme, _kb, done) => {
     const container = new Container();
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
-    // 单个 Text 统一换行：paddingY 始终为 0，避免逐行组件累积垂直留白。
-    container.addChild(new Text(visible.join("\n"), 1, 0));
-    container.addChild(new Text(theme.fg("dim", " Esc/Enter 关闭"), 1, 0));
+    // 面板主体（标题 + 正文 + 提示行）作为一个整体块居中，行内保持左对齐（表格列对齐不变）。
+    container.addChild(new CenteredBlock([theme.fg("accent", theme.bold(title)), ...visible, theme.fg("dim", " Esc/Enter 关闭")].join("\n"), 1));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -235,8 +233,8 @@ export async function quotaDialog(ctx: ExtensionCommandContext, report: QuotaRep
     rows.push(theme.fg("dim", " Esc 关闭"));
     rows.push("");
 
-    // 单个 Text 渲染所有数据行，避免每行 padding 累积造成空屏。
-    container.addChild(new Text(rows.join("\n"), 1, 0));
+    // 单个 CenteredBlock 渲染所有数据行：整块内容左右居中，行内保持左对齐（组名/进度条缩进不变），避免每行 padding 累积造成空屏。
+    container.addChild(new CenteredBlock(rows.join("\n"), 1));
     container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
     return {
@@ -275,6 +273,69 @@ export interface ProgressFeedback {
   done(result?: string): void;
   /** 任务失败：清除底部状态，toast 报错 */
   error(message: string): void;
+}
+
+/* ==================== 块级居中组件 ==================== */
+
+/**
+ * 块级居中多行文本组件（行内文字不做居中）：
+ * - 以「整块内容」为一个整体左右居中：先取所有行中的最大显示宽度作为块宽，再统一左移
+ *   （保留每行原有的缩进 / 表格列对齐结构），例如表格整体居中但列仍对齐。
+ * - 显示宽度由 visibleWidth 计算：CJK 全角按 2 列、ANSI 转义序列不计宽。
+ * - 块宽不小于面板可用宽度时退化为左对齐；单行超宽时自动换行兜底（窄终端）。
+ * - 每行都补齐到面板全宽，保证差分渲染不残留旧字符；无垂直 padding，间距由调用方空行控制。
+ */
+class CenteredBlock implements Component {
+  private lines: string[];
+  private paddingX: number;
+  private cachedWidth?: number;
+  private cachedOut?: string[];
+
+  constructor(text: string, paddingX = 1) {
+    this.lines = text.split("\n");
+    this.paddingX = paddingX;
+  }
+
+  setText(text: string): void {
+    this.lines = text.split("\n");
+    this.cachedWidth = undefined;
+    this.cachedOut = undefined;
+  }
+
+  invalidate(): void {
+    this.cachedWidth = undefined;
+    this.cachedOut = undefined;
+  }
+
+  render(width: number): string[] {
+    if (this.cachedOut && this.cachedWidth === width) return this.cachedOut;
+    const contentWidth = Math.max(1, width - this.paddingX * 2);
+    const normalized = this.lines.map((l) => l.replace(/\t/g, "   "));
+    const blockWidth = normalized.reduce((m, l) => Math.max(m, visibleWidth(l)), 0);
+    // 块宽小于面板可用宽度时才整体平移；否则退化为左对齐
+    const shift = blockWidth < contentWidth ? Math.floor((contentWidth - blockWidth) / 2) : 0;
+    const out: string[] = [];
+    for (const line of normalized) {
+      if (shift > 0) {
+        // 整块平移：所有行加同一个左缩进，行内对齐结构不变
+        const vw = visibleWidth(line);
+        out.push(" ".repeat(this.paddingX + shift) + line + " ".repeat(width - this.paddingX - shift - vw));
+      } else {
+        // 左对齐兜底：单行超宽自动换行
+        for (const seg of wrapTextWithAnsi(line, contentWidth)) {
+          if (seg === "") {
+            out.push(" ".repeat(width));
+          } else {
+            const vw = visibleWidth(seg);
+            out.push(" ".repeat(this.paddingX) + seg + " ".repeat(width - this.paddingX - vw));
+          }
+        }
+      }
+    }
+    this.cachedWidth = width;
+    this.cachedOut = out;
+    return out;
+  }
 }
 
 const STATUS_KEY = "pisync";
