@@ -239,6 +239,7 @@
   .sidebar-action { width: 100%; padding: 8px 10px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); cursor: pointer; text-align: left; }
   .sidebar-action:hover { color: var(--text); background: var(--surface-hover); }
   .auto-refresh-row { display: flex; align-items: center; gap: 8px; margin: 4px 2px 8px; color: var(--muted); font-size: 12px; }
+  .sidebar-settings { display: none; }
   .workspace { min-height: 100vh; margin-left: var(--sidebar); }
   .topbar { position: sticky; top: 0; z-index: 40; height: var(--topbar); padding: 0 28px; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border); background: rgba(243, 246, 248, .82); backdrop-filter: blur(18px); }
   html.sl-theme-dark .topbar { background: rgba(11, 17, 27, .82); }
@@ -483,8 +484,9 @@
     .metric:last-child { grid-column: 1 / -1; }
     .page-head { flex-direction: column; }
     .page-head h2 { font-size: 21px; }
-    .topbar-title p, .updated-at, .connection-pill span:last-child, .desktop-label { display: none; }
+    .topbar-title p, .updated-at, .connection-pill, .topbar > sl-select, .desktop-label { display: none; }
     .topbar { gap: 8px; }
+    .sidebar-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 2px 10px; }
     .toolbar { align-items: stretch; }
     .segment { width: 100%; }
     .segment button { flex: 1; }
@@ -564,8 +566,16 @@
       <div class="server-card-top"><span class="status-dot" :class="online ? 'online' : 'offline'"></span><span x-text="serverHealthLabel"></span></div>
       <div class="server-card-meta" x-html="serverCardMeta"></div>
     </div>
+    <div class="sidebar-settings">
+      <sl-select aria-label="界面主题" :value="theme" @sl-change="setTheme($event.target.value)">
+        <sl-option value="system">跟随系统</sl-option><sl-option value="light">亮色</sl-option><sl-option value="dark">暗色</sl-option>
+      </sl-select>
+      <sl-select aria-label="显示货币" :value="currency" @sl-change="setCurrency($event.target.value)">
+        <sl-option value="cny">¥ 人民币</sl-option><sl-option value="usd">$ 美元</sl-option>
+      </sl-select>
+    </div>
     <div class="auto-refresh-row">
-      <sl-switch :checked="autoRefresh" @sl-change="toggleAutoRefresh($event.target.checked)"></sl-switch>
+      <sl-switch aria-label="每 30 秒自动刷新" :checked="autoRefresh" @sl-change="toggleAutoRefresh($event.target.checked)"></sl-switch>
       <span>每 30 秒自动刷新</span>
     </div>
     <button class="sidebar-action" @click="logout()"><span class="nav-icon"><i data-lucide="key-round" aria-hidden="true">↪</i></span><span>切换访问令牌</span></button>
@@ -574,7 +584,7 @@
 
   <div class="workspace">
     <header class="topbar">
-      <sl-button class="mobile-menu" variant="default" size="small" @click="sidebarOpen = true"><i data-lucide="menu" aria-hidden="true"></i></sl-button>
+      <sl-button class="mobile-menu" variant="default" size="small" aria-label="打开导航菜单" @click="sidebarOpen = true"><i data-lucide="menu" aria-hidden="true"></i></sl-button>
       <div class="topbar-title">
         <h1 x-text="viewMeta[view][0]"></h1>
         <p x-text="viewMeta[view][1]"></p>
@@ -582,12 +592,12 @@
       <div class="topbar-spacer"></div>
       <span class="updated-at" x-text="lastUpdated ? '更新于 ' + new Date(lastUpdated).toLocaleTimeString('zh-CN', { hour12: false }) : '尚未刷新'"></span>
       <span class="connection-pill"><span class="status-dot" :class="online ? 'online' : 'offline'"></span><span x-text="topHealthText"></span></span>
-      <sl-select :value="theme" @sl-change="setTheme($event.target.value)" style="width:130px">
+      <sl-select aria-label="界面主题" :value="theme" @sl-change="setTheme($event.target.value)" style="width:130px">
         <sl-option value="system">跟随系统</sl-option>
         <sl-option value="light">亮色</sl-option>
         <sl-option value="dark">暗色</sl-option>
       </sl-select>
-      <sl-select :value="currency" @sl-change="setCurrency($event.target.value)" style="width:120px">
+      <sl-select aria-label="显示货币" :value="currency" @sl-change="setCurrency($event.target.value)" style="width:120px">
         <sl-option value="cny">¥ 人民币</sl-option>
         <sl-option value="usd">$ 美元</sl-option>
       </sl-select>
@@ -613,13 +623,13 @@
               <button :class="{ active: String(days) === String(opt.v) }" @click="setDays(opt.v)" x-text="opt.l"></button>
             </template>
           </div>
-          <sl-select hoist :value="device" placeholder="全部设备" @sl-change="setDevice($event.target.value)">
+          <sl-select hoist aria-label="筛选设备" :value="device" placeholder="全部设备" @sl-change="setDevice($event.target.value)">
             <sl-option value="">全部设备</sl-option>
             <template x-for="d in stats ? stats.devices : []" :key="d.deviceId">
               <sl-option :value="d.deviceId" x-text="d.name"></sl-option>
             </template>
           </sl-select>
-          <sl-select hoist :value="model" placeholder="全部模型" @sl-change="setModel($event.target.value)">
+          <sl-select hoist aria-label="筛选模型" :value="model" placeholder="全部模型" @sl-change="setModel($event.target.value)">
             <sl-option value="">全部模型</sl-option>
             <template x-for="m in stats ? stats.models : []" :key="m">
               <sl-option :value="m" x-text="m"></sl-option>
@@ -654,12 +664,12 @@
             <div class="card-body"><div class="chart-wrap" x-ref="trendChart"><div class="empty"><span><span class="empty-glyph"><i data-lucide="activity" aria-hidden="true">⌁</i></span>正在加载趋势…</span></div></div></div>
           </article>
           <article class="card">
-            <div class="card-head"><div class="card-title"><span class="card-title-mark" style="background:var(--violet);box-shadow:0 0 0 4px var(--violet-soft)"></span><div><h3>模型分布</h3><p>点击模型可直接筛选</p></div></div></div>
+            <div class="card-head"><div class="card-title"><span class="card-title-mark" style="background:var(--violet);box-shadow:0 0 0 4px var(--violet-soft)"></span><div><h3>模型分布</h3><p>按 Tokens 展示占比</p></div></div></div>
             <div class="card-body">
               <div class="bar-list">
                 <template x-if="!topModels.length"><div class="empty"><span>暂无分布数据</span></div></template>
                 <template x-for="row in topModels" :key="row.key">
-                  <div class="bar-row"><span class="bar-label" x-text="row.key"></span><span class="bar-track"><span class="bar-fill" :style="`width:${row.pct}%`"></span></span><span class="bar-value" x-text="fmtNum(row.total)"></span></div>
+                  <div class="bar-row"><span class="bar-label" x-text="row.label"></span><span class="bar-track"><span class="bar-fill" :style="`width:${row.pct}%`"></span></span><span class="bar-value" x-text="fmtNum(row.total)"></span></div>
                 </template>
               </div>
               <sl-details class="breakdown" summary="查看完整模型明细">
@@ -685,7 +695,7 @@
               <div class="bar-list">
                 <template x-if="!topDevices.length"><div class="empty"><span>暂无分布数据</span></div></template>
                 <template x-for="row in topDevices" :key="row.key">
-                  <div class="bar-row"><span class="bar-label" x-text="row.key"></span><span class="bar-track"><span class="bar-fill violet" :style="`width:${row.pct}%`"></span></span><span class="bar-value" x-text="fmtNum(row.total)"></span></div>
+                  <div class="bar-row"><span class="bar-label" x-text="row.label"></span><span class="bar-track"><span class="bar-fill violet" :style="`width:${row.pct}%`"></span></span><span class="bar-value" x-text="fmtNum(row.total)"></span></div>
                 </template>
               </div>
               <sl-details class="breakdown" summary="查看完整设备明细">
@@ -693,7 +703,7 @@
                   <table>
                     <thead><tr><th>设备</th><th class="num">请求</th><th class="num">输入</th><th class="num">输出</th><th class="num">Tokens</th><th class="num">费用</th></tr></thead>
                     <tbody>
-                      <template x-for="row in stats ? stats.byDevice : []" :key="row.device">
+                      <template x-for="row in stats ? stats.byDevice : []" :key="row.deviceId">
                         <tr><td :title="row.device" x-text="truncate(row.device || '(unknown)', 42)"></td><td class="num" x-text="fmtFull(row.requests)"></td><td class="num" x-text="fmtNum(row.input)"></td><td class="num" x-text="fmtNum(row.output)"></td><td class="num accent-text" x-text="fmtFull(row.total)"></td><td class="num cost-text" x-text="fmtCost(row.cost)"></td></tr>
                       </template>
                     </tbody>
@@ -727,13 +737,13 @@
             <div class="page-head"><div><h2>同步会话</h2><p>按条件分页检索会话，批量管理并阅读干净的对话正文。</p></div></div>
             <div class="toolbar">
               <div class="search"><sl-input placeholder="搜索名称、路径或 UUID…" autocomplete="off" :value="sessionSearch" @sl-input.debounce.260ms="onSessionSearch($event.target.value)"><i data-lucide="search" aria-hidden="true" slot="prefix"></i></sl-input></div>
-              <sl-select hoist :value="sessionSort" @sl-change="onSessionSort($event.target.value)">
+              <sl-select hoist aria-label="会话排序" :value="sessionSort" @sl-change="onSessionSort($event.target.value)">
                 <sl-option value="updated-desc">最近更新</sl-option><sl-option value="updated-asc">最早更新</sl-option><sl-option value="entries-desc">消息最多</sl-option><sl-option value="name-asc">名称排序</sl-option>
               </sl-select>
-              <sl-select hoist :value="sessionStatus" @sl-change="onSessionStatus($event.target.value)">
+              <sl-select hoist aria-label="会话状态" :value="sessionStatus" @sl-change="onSessionStatus($event.target.value)">
                 <sl-option value="active">未删除</sl-option><sl-option value="all">全部状态</sl-option><sl-option value="deleted">仅已删除</sl-option>
               </sl-select>
-              <sl-select hoist :value="String(sessionPageSize)" @sl-change="onSessionPageSize($event.target.value)">
+              <sl-select hoist aria-label="每页会话数" :value="String(sessionPageSize)" @sl-change="onSessionPageSize($event.target.value)">
                 <sl-option value="20">20 / 页</sl-option><sl-option value="40">40 / 页</sl-option><sl-option value="80">80 / 页</sl-option>
               </sl-select>
               <div class="toolbar-spacer"></div>
@@ -747,7 +757,7 @@
             <div class="card data-card session-table">
               <div class="table-scroll">
                 <table>
-                  <thead><tr><th class="select-cell"><sl-checkbox @sl-change="selectAllPage($event.target.checked)"></sl-checkbox></th><th>会话</th><th class="path-col">项目路径</th><th class="num">同步条目</th><th>最后更新</th><th class="source-col">来源</th></tr></thead>
+                  <thead><tr><th class="select-cell"><sl-checkbox aria-label="选择当前页所有会话" :checked="allPageSessionsSelected" :indeterminate="somePageSessionsSelected" @sl-change="selectAllPage($event.target.checked)"></sl-checkbox></th><th>会话</th><th class="path-col">项目路径</th><th class="num">同步条目</th><th>最后更新</th><th class="source-col">来源</th></tr></thead>
                   <tbody>
                     <template x-for="session in sessionData.items || []" :key="session.uuid">
                       <tr class="session-row" :class="{ selected: selectedSessions.has(session.uuid) }" tabindex="0" @click="openSession(session.uuid, true)" @keydown.enter.prevent="openSession(session.uuid, true)">
@@ -769,14 +779,14 @@
               <div class="pagination">
                 <span class="pagination-info" x-text="sessionPageInfo"></span>
                 <div class="pagination-actions">
-                  <button class="pagebtn" :disabled="sessionData.page <= 1" @click="gotoSessionPage((sessionData.page||1)-1)"><i data-lucide="chevron-left" aria-hidden="true">←</i></button>
+                  <button class="pagebtn" aria-label="上一页会话" :disabled="sessionData.page <= 1" @click="gotoSessionPage((sessionData.page||1)-1)"><i data-lucide="chevron-left" aria-hidden="true">←</i></button>
                   <template x-for="p in pageList(sessionData.page||1, sessionData.totalPages||1)" :key="p.page || ('gap'+$index)">
                     <span>
                       <span class="pagination-info" x-show="p.gap" x-text="'…'"></span>
                       <button x-show="!p.gap" class="pagebtn" :class="{ active: p.page === (sessionData.page||1) }" :aria-current="p.page === (sessionData.page||1) ? 'page' : null" @click="gotoSessionPage(p.page)" x-text="p.page"></button>
                     </span>
                   </template>
-                  <button class="pagebtn" :disabled="(sessionData.page||1) >= (sessionData.totalPages||1)" @click="gotoSessionPage((sessionData.page||1)+1)"><i data-lucide="chevron-right" aria-hidden="true">→</i></button>
+                  <button class="pagebtn" aria-label="下一页会话" :disabled="(sessionData.page||1) >= (sessionData.totalPages||1)" @click="gotoSessionPage((sessionData.page||1)+1)"><i data-lucide="chevron-right" aria-hidden="true">→</i></button>
                 </div>
               </div>
             </div>
@@ -789,7 +799,7 @@
             <article class="card session-detail-head" x-html="sessionDetailHeadHtml"></article>
             <div class="toolbar">
               <div class="search"><sl-input placeholder="在本页对话中搜索…" autocomplete="off" :value="messageSearch" @sl-input="messageSearch = $event.target.value"><i data-lucide="search" aria-hidden="true" slot="prefix"></i></sl-input></div>
-              <sl-select hoist :value="roleFilter" @sl-change="roleFilter = $event.target.value">
+              <sl-select hoist aria-label="筛选消息角色" :value="roleFilter" @sl-change="roleFilter = $event.target.value">
                 <sl-option value="">全部角色</sl-option><sl-option value="user">用户</sl-option><sl-option value="assistant">助手</sl-option>
               </sl-select>
               <div class="toolbar-spacer"></div>
@@ -815,14 +825,14 @@
             <div class="pagination" style="border:0">
               <span class="pagination-info" x-text="detailPageInfo"></span>
               <div class="pagination-actions">
-                <button class="pagebtn" :disabled="detailCurrentPage <= 1" @click="gotoDetailPage(detailCurrentPage - 1)"><i data-lucide="chevron-left" aria-hidden="true">←</i></button>
+                <button class="pagebtn" aria-label="上一页消息" :disabled="detailCurrentPage <= 1" @click="gotoDetailPage(detailCurrentPage - 1)"><i data-lucide="chevron-left" aria-hidden="true">←</i></button>
                 <template x-for="p in pageList(detailCurrentPage, detailTotalPages)" :key="p.page || ('gap'+$index)">
                   <span>
                     <span class="pagination-info" x-show="p.gap" x-text="'…'"></span>
                     <button x-show="!p.gap" class="pagebtn" :class="{ active: p.page === detailCurrentPage }" @click="gotoDetailPage(p.page)" x-text="p.page"></button>
                   </span>
                 </template>
-                <button class="pagebtn" :disabled="detailCurrentPage >= detailTotalPages" @click="gotoDetailPage(detailCurrentPage + 1)"><i data-lucide="chevron-right" aria-hidden="true">→</i></button>
+                <button class="pagebtn" aria-label="下一页消息" :disabled="detailCurrentPage >= detailTotalPages" @click="gotoDetailPage(detailCurrentPage + 1)"><i data-lucide="chevron-right" aria-hidden="true">→</i></button>
               </div>
             </div>
           </div>
@@ -837,16 +847,16 @@
         </div>
         <div class="toolbar">
           <div class="search"><sl-input placeholder="搜索设备名、平台或 ID…" autocomplete="off" :value="deviceSearch" @sl-input="deviceSearch = $event.target.value"><i data-lucide="search" aria-hidden="true" slot="prefix"></i></sl-input></div>
-          <sl-select hoist :value="deviceStatus" @sl-change="deviceStatus = $event.target.value">
+          <sl-select hoist aria-label="设备状态" :value="deviceStatus" @sl-change="deviceStatus = $event.target.value">
             <sl-option value="current">当前设备</sl-option><sl-option value="active">仅 active</sl-option><sl-option value="legacy">仅历史来源</sl-option><sl-option value="merged">已合并</sl-option><sl-option value="all">全部状态</sl-option>
           </sl-select>
-          <sl-select hoist :value="deviceMergeTarget" placeholder="选择合并目标…" @sl-change="deviceMergeTarget = $event.target.value">
+          <sl-select hoist aria-label="设备合并目标" :value="deviceMergeTarget" placeholder="选择合并目标…" @sl-change="deviceMergeTarget = $event.target.value">
             <sl-option value="">选择合并目标…</sl-option>
             <template x-for="d in mergeTargets" :key="d.deviceId">
               <sl-option :value="d.deviceId" x-text="d.name + ' [' + d.status + ']'"></sl-option>
             </template>
           </sl-select>
-          <sl-button class="small" variant="danger" :disabled="selectedDevices.size === 0 || !deviceMergeTarget" @click="mergeDevices()">合并所选</sl-button>
+          <sl-button class="small" variant="danger" :loading="merging" :disabled="selectedDevices.size === 0 || !deviceMergeTarget" @click="mergeDevices()">合并所选</sl-button>
         </div>
         <div class="device-grid">
           <template x-if="!deviceRows.length"><div class="card empty"><span><span class="empty-glyph"><i data-lucide="monitor" aria-hidden="true">⌘</i></span>没有符合条件的设备</span></div></template>
@@ -889,15 +899,15 @@
         <div class="conflict-list">
           <template x-if="!conflictRows.length"><div class="card empty"><span><span class="empty-glyph"><i data-lucide="git-merge" aria-hidden="true">◇</i></span><span x-text="conflictFilter === 'open' ? '当前没有待处理冲突' : '没有符合条件的冲突'"></span></span></div></template>
           <template x-for="conflict in conflictRows" :key="conflict.id">
-            <article class="card conflict-card" :class="{ resolved: conflict.resolved }">
+            <article class="card conflict-card" :class="{ resolved: !!conflict.resolvedAt }">
               <div class="conflict-top">
-                <div class="conflict-state"><i :data-lucide="conflict.resolved ? 'check' : 'git-merge'" aria-hidden="true"></i></div>
+                <div class="conflict-state"><i :data-lucide="conflict.resolvedAt ? 'check' : 'git-merge'" aria-hidden="true"></i></div>
                 <div class="conflict-main">
-                  <div class="conflict-title"><span x-text="conflict.objectKey || '未命名对象'"></span><span class="badge-text" :class="conflict.resolved ? 'success' : 'warning'" x-text="conflict.resolved ? '已解决' : '待处理'"></span><span class="badge-text" x-text="conflict.kind"></span></div>
+                  <div class="conflict-title"><span x-text="conflict.objectKey || '未命名对象'"></span><span class="badge-text" :class="conflict.resolvedAt ? 'success' : 'warning'" x-text="conflict.resolvedAt ? '已解决' : '待处理'"></span><span class="badge-text" x-text="conflict.kind"></span></div>
                   <div class="conflict-path" x-text="conflict.path || '(整体内容)'"></div>
-                  <div class="conflict-meta"><span x-text="(conflict.deviceA || 'A') + ' ↔ ' + (conflict.deviceB || 'B')"></span><span x-text="'发现于 ' + fmtTime(conflict.createdAt)"></span><template x-if="conflict.resolved"><span x-text="'方案 ' + (conflict.resolution || '-')"></span></template></div>
+                  <div class="conflict-meta"><span x-text="(conflict.deviceA || 'A') + ' ↔ ' + (conflict.deviceB || 'B')"></span><span x-text="'发现于 ' + fmtTime(conflict.createdAt)"></span><template x-if="conflict.resolvedAt"><span x-text="'方案 ' + (conflict.resolution || '-')"></span></template></div>
                 </div>
-                <sl-button class="small" :variant="conflict.resolved ? 'default' : 'primary'" @click="openConflict(conflict.id)" x-text="conflict.resolved ? '查看详情' : '对比处理'"></sl-button>
+                <sl-button class="small" :variant="conflict.resolvedAt ? 'default' : 'primary'" @click="openConflict(conflict.id)" x-text="conflict.resolvedAt ? '查看详情' : '对比处理'"></sl-button>
               </div>
               <div class="conflict-preview">
                 <div class="preview-pane"><strong x-text="conflict.deviceA || '版本 A'"></strong><code x-text="truncate(prettyContent(conflict.contentA), 150)"></code></div>
@@ -929,7 +939,7 @@
         <sl-radio value="manual">手动编辑</sl-radio>
       </sl-radio-group>
     </div>
-    <sl-textarea x-show="resolution === 'manual'" x-cloak :value="manualContent" @sl-input="manualContent = $event.target.value" :rows="7" style="margin-top:11px"></sl-textarea>
+    <sl-textarea x-ref="manualConflict" x-show="resolution === 'manual'" x-cloak :value="manualContent" @sl-input="manualContent = $event.target.value" :rows="7" style="margin-top:11px"></sl-textarea>
   </div>
   <div class="dialog-actions" slot="footer">
     <sl-button variant="default" @click="$refs.conflictDialog.hide()" x-text="activeConflict && activeConflict.resolvedAt ? '关闭' : '取消'"></sl-button>
@@ -1036,8 +1046,8 @@ document.addEventListener('alpine:init', function () {
       fmtRelative(ts) { if (!ts) return '从未'; const s = Math.round((Date.now() - Number(ts)) / 1000); if (s < 0) return '刚刚'; if (s < 60) return s + ' 秒前'; const m = Math.floor(s / 60); if (m < 60) return m + ' 分钟前'; const h = Math.floor(m / 60); if (h < 24) return h + ' 小时前'; const d = Math.floor(h / 24); return d < 30 ? d + ' 天前' : this.fmtTime(ts); },
       fmtUptime(sec) { sec = Number(sec) || 0; const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60); if (d) return d + ' 天 ' + h + ' 小时'; if (h) return h + ' 小时 ' + m + ' 分'; return m + ' 分钟'; },
       prettyContent(v) { const t = String(v == null ? '' : v); try { return JSON.stringify(JSON.parse(t), null, 2); } catch (_) { return t; } },
-      markdownHtml(v) { const src = String(v || ''); if (window.marked && window.DOMPurify) { try { const r = window.marked.parse(src, { gfm: true, breaks: true }); return window.DOMPurify.sanitize(r, { USE_PROFILES: { html: true }, FORBID_TAGS: ['style', 'iframe', 'form', 'input', 'button', 'textarea', 'select', 'option'], FORBID_ATTR: ['style'] }); } catch (_) { } } return '<p>' + this.esc(src).replace(/\n/g, '<br>') + '</p>'; },
-      platformGlyph(p) { const v = String(p || '').toLowerCase(); if (v.indexOf('win') >= 0) return 'windows'; if (v.indexOf('darwin') >= 0 || v.indexOf('mac') >= 0) return 'apple'; if (v.indexOf('linux') >= 0) return 'linux'; return 'terminal'; },
+      markdownHtml(v) { const src = String(v || ''); if (window.marked && window.DOMPurify) { try { const r = window.marked.parse(src, { gfm: true, breaks: true }); return window.DOMPurify.sanitize(r, { USE_PROFILES: { html: true }, FORBID_TAGS: ['style', 'iframe', 'form', 'input', 'button', 'textarea', 'select', 'option', 'img'], FORBID_ATTR: ['style'] }); } catch (_) { } } return '<p>' + this.esc(src).replace(/\n/g, '<br>') + '</p>'; },
+      platformGlyph(p) { const v = String(p || '').toLowerCase(); if (v.indexOf('win') >= 0) return 'app-window'; if (v.indexOf('darwin') >= 0 || v.indexOf('mac') >= 0) return 'apple'; if (v.indexOf('linux') >= 0) return 'shell'; return 'terminal'; },
       roleKind(e) { return e.role === 'user' ? 'user' : 'assistant'; },
       pageList(page, total) { const pages = []; for (let n = 1; n <= total; n++) { if (n === 1 || n === total || Math.abs(n - page) <= 1) pages.push(n); } const out = []; let last = 0; pages.forEach(n => { if (last && n - last > 1) out.push({ gap: true }); out.push({ page: n }); last = n; }); return out; },
 
@@ -1060,7 +1070,12 @@ document.addEventListener('alpine:init', function () {
           throw error;
         } finally { clearTimeout(timer); if (requestKey && this.requestControllers[requestKey] === controller) delete this.requestControllers[requestKey]; }
       },
-      async publicHealth() { const r = await fetch(this.origin + '/api/v1/health'); const b = await r.json(); if (!r.ok || !b.ok) throw new Error('服务器不可用'); return b.data; },
+      async publicHealth() {
+        const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 8000);
+        try { const r = await fetch(this.origin + '/api/v1/health', { signal: controller.signal }); const b = await r.json(); if (!r.ok || !b.ok) throw new Error('服务器不可用'); return b.data; }
+        catch (e) { if (e && e.name === 'AbortError') throw new Error('健康检查超时'); throw e; }
+        finally { clearTimeout(timer); }
+      },
 
       // ============ 健康 / 主题 ============
       setHealth(health, online) {
@@ -1104,7 +1119,7 @@ document.addEventListener('alpine:init', function () {
       logout() {
         Object.keys(this.requestControllers).forEach(k => this.requestControllers[k].abort());
         this.clearStoredToken(); this.token = '';
-        this.stats = null; this.devices = []; this.conflicts = []; this.selectedSessions.clear(); this.selectedDevices.clear();
+        this.stats = null; this.devices = []; this.conflicts = []; this.selectedSessions = new Set(); this.selectedDevices = new Set();
         this.loadedViews = { overview: false, sessions: false, devices: false, conflicts: false };
         this.sessionDetailMode = false; this.authed = false;
         this.authError = '';
@@ -1137,7 +1152,10 @@ document.addEventListener('alpine:init', function () {
         const view = this.view;
         const jobs = [{ key: 'health', promise: this.publicHealth() }];
         if (view === 'overview') { jobs.push({ key: 'stats', promise: this.api(this.statsPath(), { requestKey: 'stats' }) }); jobs.push({ key: 'recentSessions', promise: this.api('/api/v1/web/sessions?page=1&limit=7&status=active&sort=updated-desc', { requestKey: 'recentSessions' }) }); }
-        else if (view === 'sessions') jobs.push({ key: 'sessionData', promise: this.api(this.sessionsPath(), { requestKey: 'sessions' }) });
+        else if (view === 'sessions') {
+          if (this.sessionDetailMode && this.detail && this.detail.uuid) jobs.push({ key: 'sessionDetail', promise: this.api('/api/v1/web/sessions/' + encodeURIComponent(this.detail.uuid) + '?limit=' + DETAIL_PAGE_SIZE + '&offset=' + this.detailOffset, { requestKey: 'sessionDetail' }) });
+          else jobs.push({ key: 'sessionData', promise: this.api(this.sessionsPath(), { requestKey: 'sessions' }) });
+        }
         else if (view === 'devices') jobs.push({ key: 'devices', promise: this.api('/api/v1/devices', { requestKey: 'devices' }) });
         else if (view === 'conflicts') jobs.push({ key: 'conflicts', promise: this.api('/api/v1/conflicts', { requestKey: 'conflicts' }) });
         const results = await Promise.allSettled(jobs.map(j => j.promise));
@@ -1148,6 +1166,7 @@ document.addEventListener('alpine:init', function () {
           if (key === 'stats') this.stats = r.value;
           else if (key === 'recentSessions') { this.activeSessionTotal = r.value.total; this._recent = r.value.items || []; }
           else if (key === 'sessionData') this.sessionData = r.value;
+          else if (key === 'sessionDetail') this.detail = r.value;
           else if (key === 'devices') this.devices = r.value;
           else if (key === 'conflicts') this.conflicts = r.value;
           else if (key === 'health') { this.health = r.value; this.setHealth(this.health, true); }
@@ -1200,7 +1219,7 @@ document.addEventListener('alpine:init', function () {
           { view: 'conflicts', label: '冲突', icon: 'git-merge', badge: this.loadedViews.conflicts ? this.fmtNum(open) : '–', alert: open > 0 }
         ];
       },
-      get rangeLabel() { return ({ '1': '近 1 天', '7': '近 7 天', '30': '近 30 天', all: '全部时间' })[String(this.days)] || ''; },
+      get rangeLabel() { return ({ '1': '近 24 小时', '7': '近 7 天', '30': '近 30 天', all: '全部时间' })[String(this.days)] || ''; },
       get filterSummary() {
         if (!this.stats) return '全部客户端聚合';
         const active = [];
@@ -1220,9 +1239,9 @@ document.addEventListener('alpine:init', function () {
           { label: '客户端', value: this.fmtNum(sum.devices), detail: this.stats.byModel.length + ' 个模型', glyph: 'monitor', color: 'var(--green)', soft: 'var(--green-soft)' }
         ];
       },
-      get topModels() { return this.barRows(this.stats ? this.stats.byModel : [], 'model'); },
-      get topDevices() { return this.barRows(this.stats ? this.stats.byDevice : [], 'device'); },
-      barRows(rows, key) { if (!rows || !rows.length) return []; const top = rows.slice(0, 7); const max = Math.max.apply(Math, top.map(r => r.total || 0).concat([1])); return top.map(r => ({ key: r[key] || '(unknown)', total: r.total || 0, pct: Math.max(1, (r.total || 0) / max * 100) })); },
+      get topModels() { return this.barRows(this.stats ? this.stats.byModel : [], 'model', 'model'); },
+      get topDevices() { return this.barRows(this.stats ? this.stats.byDevice : [], 'device', 'deviceId'); },
+      barRows(rows, labelKey, idKey) { if (!rows || !rows.length) return []; const top = rows.slice(0, 7); const max = Math.max.apply(Math, top.map(r => r.total || 0).concat([1])); return top.map(r => ({ key: r[idKey] || r[labelKey] || '(unknown)', label: r[labelKey] || '(unknown)', total: r.total || 0, pct: Math.max(1, (r.total || 0) / max * 100) })); },
       get recentSessions() { return (this._recent || []).filter(s => !s.deleted).slice(0, 7); },
 
       setDays(v) { this.days = v; this.refreshStats(); },
@@ -1265,20 +1284,23 @@ document.addEventListener('alpine:init', function () {
       },
 
       // ============ sessions ============
-      onSessionSearch(v) { this.sessionSearch = v; this.sessionPage = 1; this.selectedSessions.clear(); this.loadSessionsPage(); },
-      onSessionSort(v) { this.sessionSort = v; this.sessionPage = 1; this.selectedSessions.clear(); this.loadSessionsPage(); },
-      onSessionStatus(v) { this.sessionStatus = v; this.sessionPage = 1; this.selectedSessions.clear(); this.loadSessionsPage(); },
-      onSessionPageSize(v) { this.sessionPageSize = Number(v) || 40; this.sessionPage = 1; this.selectedSessions.clear(); this.loadSessionsPage(); },
-      selectAllPage(on) { (this.sessionData.items || []).forEach(s => { if (s.deleted) return; if (on) this.selectedSessions.add(s.uuid); else this.selectedSessions.delete(s.uuid); }); },
-      toggleSelectSession(uuid, on) { if (on) this.selectedSessions.add(uuid); else this.selectedSessions.delete(uuid); },
-      clearSessionSelection() { this.selectedSessions.clear(); },
+      onSessionSearch(v) { this.sessionSearch = v; this.sessionPage = 1; this.selectedSessions = new Set(); this.loadSessionsPage(); },
+      onSessionSort(v) { this.sessionSort = v; this.sessionPage = 1; this.selectedSessions = new Set(); this.loadSessionsPage(); },
+      onSessionStatus(v) { this.sessionStatus = v; this.sessionPage = 1; this.selectedSessions = new Set(); this.loadSessionsPage(); },
+      onSessionPageSize(v) { this.sessionPageSize = Number(v) || 40; this.sessionPage = 1; this.selectedSessions = new Set(); this.loadSessionsPage(); },
+      get selectablePageSessions() { return (this.sessionData.items || []).filter(s => !s.deleted); },
+      get allPageSessionsSelected() { const rows = this.selectablePageSessions; return rows.length > 0 && rows.every(s => this.selectedSessions.has(s.uuid)); },
+      get somePageSessionsSelected() { const rows = this.selectablePageSessions; const selected = rows.filter(s => this.selectedSessions.has(s.uuid)).length; return selected > 0 && selected < rows.length; },
+      selectAllPage(on) { const next = new Set(this.selectedSessions); this.selectablePageSessions.forEach(s => { if (on) next.add(s.uuid); else next.delete(s.uuid); }); this.selectedSessions = next; },
+      toggleSelectSession(uuid, on) { const next = new Set(this.selectedSessions); if (on) next.add(uuid); else next.delete(uuid); this.selectedSessions = next; },
+      clearSessionSelection() { this.selectedSessions = new Set(); },
       gotoSessionPage(n) { this.sessionPage = n; this.loadSessionsPage(); window.scrollTo({ top: 0, behavior: 'smooth' }); },
       get sessionPageInfo() { const d = this.sessionData; const start = (d.page - 1) * d.pageSize; const end = Math.min(d.total, start + (d.items || []).length); return d.total ? '第 ' + (start + 1) + '–' + end + ' 项，共 ' + d.total + ' 项' : '0 项'; },
 
       async openSession(uuid, updateHash = true) {
         this.setView('sessions', false);
         this.sessionDetailMode = true;
-        this.detail = null; this.detailOffset = 0; this.messageExpanded = {};
+        this.detail = null; this.detailOffset = 0; this.messageSearch = ''; this.roleFilter = ''; this.messageExpanded = {};
         if (updateHash) history.pushState(null, '', '#sessions/' + encodeURIComponent(uuid));
         await this.loadDetail(uuid);
       },
@@ -1299,7 +1321,7 @@ document.addEventListener('alpine:init', function () {
       get detailCurrentPage() { return Math.floor(this.detailOffset / DETAIL_PAGE_SIZE) + 1; },
       get detailTotalPages() { return this.detail ? Math.max(1, Math.ceil(this.detail.total / DETAIL_PAGE_SIZE)) : 1; },
       get detailPageInfo() { return this.detail ? '第 ' + this.detailCurrentPage + ' 页 · 本页 ' + this.detail.entries.length + ' 条' : ''; },
-      gotoDetailPage(n) { this.detailOffset = (n - 1) * DETAIL_PAGE_SIZE; if (this.detail) this.loadDetail(this.detail.uuid); window.scrollTo({ top: 0, behavior: 'smooth' }); },
+      gotoDetailPage(n) { this.detailOffset = (n - 1) * DETAIL_PAGE_SIZE; this.messageExpanded = {}; if (this.detail) this.loadDetail(this.detail.uuid); window.scrollTo({ top: 0, behavior: 'smooth' }); },
       get messageResultCount() { if (!this.detail) return ''; const rows = this.filteredMessageItems; return rows.length + ' / ' + this.detail.entries.length + ' 条'; },
       get filteredMessageItems() {
         if (!this.detail) return [];
@@ -1326,10 +1348,10 @@ document.addEventListener('alpine:init', function () {
           let totalTokens = 0, totalCost = 0; const modelSet = {};
           items.forEach(it => { const u = it.entry.usage; if (u) { totalTokens += u.totalTokens || 0; totalCost += u.cost || 0; } if (it.entry.model) modelSet[it.entry.model] = true; });
           const usage = (totalTokens || totalCost) ? this.fmtFull(totalTokens) + ' tok · ' + this.fmtCost(totalCost) : '';
-          const technical = [Object.keys(modelSet).join(' · '), items[0].entry.sourceDevice].filter(Boolean).map(this.esc.bind(this)).join(' · ');
+          const technical = [Object.keys(modelSet).join(' · '), items[0].entry.sourceDevice].filter(Boolean).join(' · ');
           const firstTs = items[0].entry.ts, lastTs = items[items.length - 1].entry.ts;
-          const timeLabel = !firstTs ? '' : (firstTs === lastTs ? this.esc(this.fmtTime(firstTs)) : this.esc(this.fmtTime(firstTs)) + ' ~ ' + this.esc(this.fmtTime(lastTs)));
-          const key = items.map(i => i.index).join(',');
+          const timeLabel = !firstTs ? '' : (firstTs === lastTs ? this.fmtTime(firstTs) : this.fmtTime(firstTs) + ' ~ ' + this.fmtTime(lastTs));
+          const key = items.map(i => i.entry.id || (this.detailOffset + i.index)).join(',');
           const combined = items.map(it => it.entry.text || '').join('\n\n');
           const collapsible = combined.length > 1200;
           const bodyHtml = items.map((it, i) => (i > 0 ? '<hr class="merge-divider">' : '') + this.markdownHtml(it.entry.text || '无文本内容')).join('');
@@ -1346,7 +1368,7 @@ document.addEventListener('alpine:init', function () {
         try {
           const result = await this.api('/api/v1/web/sessions/delete', { method: 'POST', body: JSON.stringify({ uuids, confirm: true }) });
           this.$refs.deleteDialog.hide();
-          this.selectedSessions.clear();
+          this.selectedSessions = new Set();
           this.toast('已删除 ' + result.pruned + ' 个会话正文，保留 ' + result.usageRows + ' 条用量摘要', 'success');
           await this.refreshAll(true);
         } catch (e) { this.toast('批量删除失败：' + e.message, 'error'); }
@@ -1368,7 +1390,7 @@ document.addEventListener('alpine:init', function () {
         const online = this.devices.filter(d => d.status === 'active' && Date.now() - d.lastSeen < 5 * 60 * 1000).length;
         return online + ' 台最近在线 · 共 ' + this.devices.length + ' 台 · 已选 ' + this.selectedDevices.size + ' 台';
       },
-      toggleSelectDevice(id, on) { if (on) this.selectedDevices.add(id); else this.selectedDevices.delete(id); },
+      toggleSelectDevice(id, on) { const next = new Set(this.selectedDevices); if (on) { next.add(id); if (this.deviceMergeTarget === id) this.deviceMergeTarget = ''; } else next.delete(id); this.selectedDevices = next; },
       async renameDevice(id) {
         const device = this.devices.find(d => d.deviceId === id); if (!device || device.status === 'merged') return;
         const name = window.prompt('输入新的设备显示名：', device.name || '');
@@ -1393,7 +1415,7 @@ document.addEventListener('alpine:init', function () {
           const typed = window.prompt(warning + '\n\n请输入目标设备名“' + target.name + '”确认永久合并：', '');
           if (typed !== target.name) { this.toast('设备名不匹配，已取消合并', 'error'); return; }
           await this.api('/api/v1/devices/merge', { method: 'POST', body: JSON.stringify({ sourceDeviceIds, targetDeviceId, confirmTargetName: typed }) });
-          this.selectedDevices.clear();
+          this.selectedDevices = new Set(); this.deviceMergeTarget = '';
           this.devices = await this.api('/api/v1/devices');
           this.stats = await this.api(this.statsPath());
           this.renderTrend(); this.refreshIcons();
@@ -1423,7 +1445,7 @@ document.addEventListener('alpine:init', function () {
       },
       onResolutionChange(v) {
         this.resolution = v;
-        if (v === 'manual') this.$nextTick(() => { const t = this.$root.querySelector('sl-textarea'); if (t) t.focus(); });
+        if (v === 'manual') this.$nextTick(() => { if (this.$refs.manualConflict) this.$refs.manualConflict.focus(); });
       },
       async resolveConflict() {
         const c = this.activeConflict; if (!c || c.resolvedAt) return;
@@ -1481,7 +1503,6 @@ document.addEventListener('alpine:init', function () {
           else if (e.key === 'Escape' && this.view === 'sessions' && this.sessionDetailMode) { this.backToSessions(); }
         });
 
-        window.addEventListener('popstate', () => this.routeFromHash());
         window.addEventListener('hashchange', () => this.routeFromHash());
         document.addEventListener('visibilitychange', () => { if (!document.hidden && this.token && this.authed && this.autoRefresh && this.lastUpdated && Date.now() - this.lastUpdated > 30000) this.refreshAll(true); });
 

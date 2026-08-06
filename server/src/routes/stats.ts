@@ -48,8 +48,8 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
       params.push(deviceId);
     }
     if (model) {
-      clauses.push(`u.model = ?`);
-      params.push(model);
+      clauses.push(model === "(unknown)" ? `u.model = ''` : `u.model = ?`);
+      if (model !== "(unknown)") params.push(model);
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const summary = dbs.db

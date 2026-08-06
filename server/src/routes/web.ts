@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { SyncDb } from "../db.js";
 import { pruneSessions } from "../sessions.js";
+import { usageCostUsd } from "../pricing.js";
 
 interface EntryView {
   id: string;
@@ -55,11 +56,15 @@ function parseReadableEntry(line: string): EntryView | null {
     const usage = message.usage as Record<string, unknown> | undefined;
     if (usage && Object.keys(usage).length > 0) {
       const cost = (usage.cost ?? {}) as Record<string, unknown>;
+      const input = Number(usage.input ?? 0) || 0;
+      const output = Number(usage.output ?? 0) || 0;
+      const cacheRead = Number(usage.cacheRead ?? 0) || 0;
+      const cacheWrite = Number(usage.cacheWrite ?? 0) || 0;
       entry.usage = {
-        input: Number(usage.input ?? 0) || 0,
-        output: Number(usage.output ?? 0) || 0,
+        input,
+        output,
         totalTokens: Number(usage.totalTokens ?? 0) || 0,
-        cost: Number(cost.total ?? 0) || 0,
+        cost: usageCostUsd({ provider: entry.provider ?? "", model: entry.model ?? "", input, output, cacheRead, cacheWrite }, Number(cost.total ?? 0) || 0),
       };
     }
     return entry;

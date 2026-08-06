@@ -120,6 +120,22 @@ test("web console serves the upgraded dashboard shell", async (t) => {
   assert.match(html, /toggleMessageExpanded\(group\.key\)/);
   assert.match(html, /get trendTitle\(\).*每小时趋势.*每日趋势/);
   assert.match(html, /this\.stats\.byHour/);
+  assert.match(html, /按 Tokens 展示占比/);
+  assert.match(html, /conflict\.resolvedAt \? '已解决' : '待处理'/);
+  assert.doesNotMatch(html, /conflict\.resolved\b/);
+  assert.match(html, /:checked="allPageSessionsSelected" :indeterminate="somePageSessionsSelected"/);
+  assert.match(html, /get allPageSessionsSelected\(\)/);
+  assert.match(html, /if \(this\.deviceMergeTarget === id\) this\.deviceMergeTarget = ''/);
+  assert.match(html, /:loading="merging"/);
+  assert.match(html, /controller\.abort\(\), 8000/);
+  assert.match(html, /return 'app-window'.*return 'shell'/);
+  assert.doesNotMatch(html, /return 'windows'|return 'linux'/);
+  assert.match(html, /:key="row\.deviceId"/);
+  assert.doesNotMatch(html, /addEventListener\('popstate'/);
+  assert.match(html, /FORBID_TAGS: \[[^\]]*'img'/);
+  assert.match(html, /class="sidebar-settings"/);
+  assert.match(html, /key: 'sessionDetail'.*requestKey: 'sessionDetail'/);
+  assert.match(html, /else if \(key === 'sessionDetail'\) this\.detail = r\.value/);
   assert.doesNotMatch(html, /:class="\[group\.kind, \{/);
   assert.match(html, /alpinejs@3\.15\.12/);
   assert.match(html, /chart\.js@4\.4\.7/);
@@ -731,7 +747,7 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
       id,
       parentId: null,
       timestamp: ts,
-      message: { role, provider, model, usage },
+      message: { role, provider, model, content: "usage " + id, usage },
     }),
   });
   const pushSessions = async (deviceName: string, sessions: unknown[]) => {
@@ -830,6 +846,7 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
     entries: [
       usageEntry("g1", new Date(now - 70 * 60_000).toISOString(), "assistant", "glm-5.2", { input: 1_000_000, output: 0, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
       usageEntry("g2", new Date(now - 5 * 60_000).toISOString(), "assistant", "glm-5.2-high", { input: 0, output: 1_000_000, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
+      usageEntry("u1", new Date(now - 2 * 60_000).toISOString(), "assistant", "", { input: 10, output: 0, totalTokens: 10, cost: { total: 0 } }),
     ],
     mtime: now,
   }]);
@@ -838,6 +855,16 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
   assert.equal(hourlyJson.data.byHour.length, 2);
   assert.match(hourlyJson.data.byHour[0].date, /^\d{4}-\d{2}-\d{2} \d{2}:00$/);
   assert.equal(Math.round(hourlyJson.data.summary.cost * USD_CNY_REFERENCE), 36);
+
+  const unknown = await fetch(`${ctx.base}/api/v1/web/stats?days=1&model=${encodeURIComponent("(unknown)")}`, { headers: headers(ctx) });
+  const unknownJson = (await unknown.json()) as { data: { summary: { requests: number; totalTokens: number } } };
+  assert.equal(unknownJson.data.summary.requests, 1);
+  assert.equal(unknownJson.data.summary.totalTokens, 10);
+
+  const glmDetail = await fetch(`${ctx.base}/api/v1/web/sessions/stats-sess-glm`, { headers: headers(ctx) });
+  const glmDetailJson = (await glmDetail.json()) as { data: { entries: Array<{ id: string; usage?: { cost: number } }> } };
+  const glmEntry = glmDetailJson.data.entries.find((entry) => entry.id === "g1");
+  assert.equal(Math.round((glmEntry?.usage?.cost ?? 0) * USD_CNY_REFERENCE), 8);
 
   // 未认证 → 401
   const denied = await fetch(`${ctx.base}/api/v1/web/stats`);
