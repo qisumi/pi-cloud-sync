@@ -984,7 +984,12 @@ test("web sessions: server pagination, readable messages and bulk content prunin
     headers: { authorization: `Bearer ${ctx.token}` },
   });
   const detailJson = (await detail.json()) as {
-    data: { total: number; rawTotal: number; entries: Array<{ role: string; text: string }> };
+    data: {
+      total: number;
+      rawTotal: number;
+      entries: Array<{ role: string; text: string }>;
+      byModel: Array<{ model: string; requests: number; input: number; output: number; total: number; cost: number }>;
+    };
   };
   assert.equal(detailJson.data.rawTotal, 4);
   assert.equal(detailJson.data.total, 2);
@@ -993,6 +998,13 @@ test("web sessions: server pagination, readable messages and bulk content prunin
   assert.equal(detailJson.data.entries[0].text, "**最终答案**");
   assert.ok(!JSON.stringify(detailJson.data).includes("HUGE TOOL OUTPUT"));
   assert.ok(!JSON.stringify(detailJson.data).includes("调用工具"));
+  // byModel：本会话三条用量记录均为 model-a，按模型聚合
+  assert.equal(detailJson.data.byModel.length, 1);
+  assert.equal(detailJson.data.byModel[0].model, "model-a");
+  assert.equal(detailJson.data.byModel[0].requests, 3);
+  assert.equal(detailJson.data.byModel[0].input, 33);
+  assert.equal(detailJson.data.byModel[0].output, 12);
+  assert.equal(detailJson.data.byModel[0].total, 45);
 
   const beforeStats = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, {
     headers: { authorization: `Bearer ${ctx.token}` },

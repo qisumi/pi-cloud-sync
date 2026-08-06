@@ -53,6 +53,10 @@ GET  /api/v1/admin/stats                # 对象/会话/冲突/设备数量
 供控制台绘制最近 24 小时趋势。Z.AI/智谱渠道上报为零费用的 GLM-5.2 系列记录按公开按量价估算；
 渠道已经上报的非零费用始终优先。
 
+`/api/v1/web/sessions/:uuid` 除分页的 `entries` 与汇总 `usageSummary`（requests/totalTokens/cost/models）外，
+还返回 `byModel`（按 model 分组的 requests/input/output/total/cost 明细，按 total 降序），
+供会话详情页展示模型分布统计表；即使会话正文被删除（`contentPruned`）该明细仍保留。
+
 ## 会话增量与确认
 
 - 客户端按 JSONL 文件保存 `size + mtime + offset + boundaryHash`。未变化文件只执行 `stat`；追加文件只读新增完整行。

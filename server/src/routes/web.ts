@@ -215,6 +215,27 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
         )
         .get(uuid) as { requests: number; total_tokens: number; cost: number; models: number };
 
+      // 按模型分组的用量分布，供会话页统计表使用。
+      const byModel = dbs.db
+        .prepare(
+          `SELECT CASE WHEN model = '' THEN '(unknown)' ELSE model END AS model,
+                  COALESCE(SUM(requests), 0) AS requests,
+                  COALESCE(SUM(input_tokens), 0) AS input,
+                  COALESCE(SUM(output_tokens), 0) AS output,
+                  COALESCE(SUM(total_tokens), 0) AS total,
+                  COALESCE(SUM(cost), 0) AS cost
+           FROM session_usage WHERE session_uuid = ?
+           GROUP BY model ORDER BY total DESC`,
+        )
+        .all(uuid) as Array<{
+          model: string;
+          requests: number;
+          input: number;
+          output: number;
+          total: number;
+          cost: number;
+        }>;
+
       return {
         ok: true,
         data: {
@@ -238,6 +259,7 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
             cost: usage.cost,
             models: usage.models,
           },
+          byModel,
         },
       };
     },
