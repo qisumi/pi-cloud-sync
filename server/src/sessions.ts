@@ -8,7 +8,7 @@ import type {
   SessionSnapshot,
   UsageEventChange,
 } from "@pi-cloud-sync/shared";
-import { parseUsageHit, rolloutModelHint } from "./usage.js";
+import { parseUsageHit } from "./usage.js";
 import { usageCostUsd } from "./pricing.js";
 
 export interface SessionMergeResult {
@@ -68,10 +68,9 @@ function upsertUsageFromLine(
   line: string,
   deviceName: string,
   deviceId: string,
-  hint?: { model?: string; provider?: string },
 ): void {
   dbs.db.prepare(`DELETE FROM session_usage WHERE session_uuid = ? AND entry_id = ?`).run(uuid, entryId);
-  const hit = parseUsageHit(line, deviceName, uuid, hint);
+  const hit = parseUsageHit(line, deviceName, uuid);
   if (!hit) return;
   dbs.db
     .prepare(
@@ -199,10 +198,7 @@ export function mergeSession(
     `UPDATE session_entries SET line = ?, source_device = ?, source_device_id = ?, received_at = ?,
        role = ?, readable = ?, occurred_at = ? WHERE session_uuid = ? AND entry_id = ?`,
   );
-  let usageHint: { model?: string; provider?: string } = {};
   for (const e of change.entries) {
-    const hintUpdate = rolloutModelHint(e.lineJson);
-    if (hintUpdate) usageHint = { ...usageHint, ...hintUpdate };
     const existing = select.get(change.uuid, e.id) as
       | { line: string; source_device: string; source_device_id: string; received_at: number }
       | undefined;
@@ -226,7 +222,7 @@ export function mergeSession(
           change.uuid,
           e.id,
         );
-        upsertUsageFromLine(dbs, change.uuid, e.id, e.lineJson, deviceName, device.deviceId, usageHint);
+        upsertUsageFromLine(dbs, change.uuid, e.id, e.lineJson, deviceName, device.deviceId);
         accepted++;
       }
     } else if (existing.line !== e.lineJson && !fastForward) {
@@ -245,7 +241,7 @@ export function mergeSession(
           e.id,
         );
         touchChange(dbs, change.uuid, e.id, "entry", "update");
-        upsertUsageFromLine(dbs, change.uuid, e.id, e.lineJson, deviceName, device.deviceId, usageHint);
+        upsertUsageFromLine(dbs, change.uuid, e.id, e.lineJson, deviceName, device.deviceId);
         accepted++;
       } else {
         conflicts++;
@@ -604,11 +600,8 @@ export function pruneSessions(dbs: SyncDb, uuids: string[], actor: string): Prun
         source_device: string;
         source_device_id: string;
       }>;
-      let usageHint: { model?: string; provider?: string } = {};
       for (const entry of entries) {
-        const hintUpdate = rolloutModelHint(entry.line);
-        if (hintUpdate) usageHint = { ...usageHint, ...hintUpdate };
-        const hit = parseUsageHit(entry.line, entry.source_device, uuid, usageHint);
+        const hit = parseUsageHit(entry.line, entry.source_device, uuid);
         if (!hit) continue;
         insertUsage.run(
           uuid,
@@ -640,94 +633,4 @@ export function pruneSessions(dbs: SyncDb, uuids: string[], actor: string): Prun
   transaction();
 
   return { requested: unique.length, pruned, missing, usageRows };
-}
-
-export interface ReindexUsageResult {
-  requested: number;
-  reindexed: number;
-  skipped: number;
-  missing: string[];
-  usageRows: number;
-}
-
-/**
- * 仅重新解析用量：对每个会话 clearUsage 后用 parseUsageHit 重跑（携带 rollout model hint），
- * 回填 session_usage 并刷新会话汇总。不删除正文、不改 header 元信息、不发同步变更——
- * 用于定价/解析规则更新后补全历史用量（如 Codex token_count 计费）。
- * uuids 省略或为空时处理全部未裁剪（content_pruned = 0）会话；已裁剪会话跳过以免清空既有用量。
- */
-export function reindexSessionUsage(dbs: SyncDb, uuids?: string[]): ReindexUsageResult {
-  const db = dbs.db;
-  const targets =
-    uuids && uuids.length > 0
-      ? [...new Set(uuids.map((u) => u.trim()).filter(Boolean))]
-      : (db.prepare(`SELECT uuid FROM session_headers WHERE content_pruned = 0`).all() as { uuid: string }[]).map((r) => r.uuid);
-
-  const selectHeader = db.prepare(`SELECT uuid, content_pruned FROM session_headers WHERE uuid = ?`);
-  const selectEntries = db.prepare(
-    `SELECT entry_id, line, source_device, source_device_id FROM session_entries WHERE session_uuid = ?`,
-  );
-  const clearUsage = db.prepare(`DELETE FROM session_usage WHERE session_uuid = ?`);
-  const insertUsage = db.prepare(
-    `INSERT OR REPLACE INTO session_usage
-       (session_uuid, entry_id, occurred_at, provider, model, source_device, source_device_id, requests,
-        input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-
-  const missing: string[] = [];
-  let reindexed = 0;
-  let skipped = 0;
-  let usageRows = 0;
-
-  const transaction = db.transaction(() => {
-    for (const uuid of targets) {
-      const header = selectHeader.get(uuid) as { uuid: string; content_pruned: number } | undefined;
-      if (!header) {
-        missing.push(uuid);
-        continue;
-      }
-      // 已裁剪会话的 entries 已删除，重跑会清空既有用量摘要 → 跳过
-      if (header.content_pruned === 1) {
-        skipped++;
-        continue;
-      }
-      clearUsage.run(uuid);
-      const entries = selectEntries.all(uuid) as Array<{
-        entry_id: string;
-        line: string;
-        source_device: string;
-        source_device_id: string;
-      }>;
-      let usageHint: { model?: string; provider?: string } = {};
-      for (const entry of entries) {
-        const hintUpdate = rolloutModelHint(entry.line);
-        if (hintUpdate) usageHint = { ...usageHint, ...hintUpdate };
-        const hit = parseUsageHit(entry.line, entry.source_device, uuid, usageHint);
-        if (!hit) continue;
-        insertUsage.run(
-          uuid,
-          entry.entry_id,
-          hit.ts,
-          hit.provider,
-          hit.model,
-          hit.device,
-          entry.source_device_id,
-          hit.requests,
-          hit.input,
-          hit.output,
-          hit.cacheRead,
-          hit.cacheWrite,
-          hit.total,
-          hit.cost,
-        );
-        usageRows++;
-      }
-      refreshHeaderSummary(dbs, uuid);
-      reindexed++;
-    }
-  });
-  transaction();
-
-  return { requested: targets.length, reindexed, skipped, missing, usageRows };
 }

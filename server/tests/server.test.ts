@@ -7,7 +7,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { USD_CNY_REFERENCE, usageCostUsd } from "../src/pricing.js";
-import { parseUsageHit, rolloutModelHint } from "../src/usage.js";
 
 test("GLM-5.2 zero-cost usage falls back to the published token pricing", () => {
   const estimated = usageCostUsd(
@@ -71,59 +70,6 @@ test("GPT-5.6 Sol/Terra/Luna zero-cost usage estimated at official USD pricing",
   assert.equal(usageCostUsd({ provider: "openai", model: "gpt-5.6", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
   // 按 model 匹配，provider 不同也认
   assert.ok(usageCostUsd({ provider: "codex", model: "gpt-5.6-luna", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0) > 0);
-});
-
-test("parseUsageHit extracts Codex rollout token_count with hint model", () => {
-  const ts = "2026-07-10T12:18:34.000Z";
-  const meta = JSON.stringify({ timestamp: ts, type: "session_meta", payload: { model_provider: "openai", session_id: "s1" } });
-  const turnCtx = JSON.stringify({ timestamp: ts, type: "turn_context", payload: { turn_id: "t1", model: "gpt-5.6-sol", cwd: "/x" } });
-  const tokenCount = JSON.stringify({
-    timestamp: ts,
-    type: "event_msg",
-    payload: {
-      type: "token_count",
-      info: {
-        // input_tokens 含 cached_input_tokens；output_tokens 含 reasoning_output_tokens
-        last_token_usage: { input_tokens: 16587, cached_input_tokens: 15104, output_tokens: 219, reasoning_output_tokens: 39, total_tokens: 16806 },
-        total_token_usage: { input_tokens: 32579, cached_input_tokens: 25088, output_tokens: 396, reasoning_output_tokens: 87, total_tokens: 32975 },
-        model_context_window: 353400,
-      },
-    },
-  });
-
-  // rolloutModelHint 从上下文行提取 model / provider
-  assert.equal(rolloutModelHint(meta)?.provider, "openai");
-  assert.equal(rolloutModelHint(turnCtx)?.model, "gpt-5.6-sol");
-  assert.equal(rolloutModelHint(tokenCount), null);
-
-  // 有序遍历维护 hint 后解析 token_count：input 拆出 cached，output 含 reasoning，按 sol 官方价计费
-  let hint: { model?: string; provider?: string } = {};
-  for (const line of [meta, turnCtx, tokenCount]) {
-    const u = rolloutModelHint(line);
-    if (u) hint = { ...hint, ...u };
-  }
-  const hit = parseUsageHit(tokenCount, "dev-1", "uuid-1", hint)!;
-  assert.equal(hit.model, "gpt-5.6-sol");
-  assert.equal(hit.provider, "openai");
-  assert.equal(hit.input, 1483); // 16587 - 15104（uncached）
-  assert.equal(hit.cacheRead, 15104);
-  assert.equal(hit.output, 219); // 已含 reasoning
-  assert.equal(hit.cacheWrite, 0);
-  assert.equal(hit.total, 16806);
-  // (1483*5 + 15104*0.5 + 219*30) / 1e6 = 0.021537
-  assert.ok(Math.abs(hit.cost - 0.021537) < 1e-9);
-
-  // 无 hint（model 未知）→ cost=0，token 仍记录
-  const noHint = parseUsageHit(tokenCount, "dev-1", "uuid-1")!;
-  assert.equal(noHint.model, "");
-  assert.equal(noHint.cost, 0);
-  assert.equal(noHint.input, 1483);
-
-  // 全零 token_count → null
-  const zero = JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } } } });
-  assert.equal(parseUsageHit(zero, "d", "u", { model: "gpt-5.6-luna" }), null);
-  // 非 token_count 的 event_msg → null
-  assert.equal(parseUsageHit(JSON.stringify({ timestamp: ts, type: "event_msg", payload: { type: "agent_message" } }), "d", "u"), null);
 });
 
 interface TestCtx {
@@ -1321,66 +1267,4 @@ test("sync v2 and devices: cursor deltas, independent usage, permanent merge and
   assert.equal(reactivatedDevice.status, "active");
   assert.equal(reactivatedDevice.totalTokens, 6, "重新上线后的新用量回到旧 deviceId");
   assert.equal(historicalTarget.totalTokens, 136, "已迁移历史不会自动回迁");
-});
-
-test("reindex-usage: re-parses Codex rollout token_count without deleting content", async (t) => {
-  const ctx = await boot();
-  t.after(async () => { await ctx.stop(); });
-
-  const ts = "2026-07-10T12:18:34.000Z";
-  const rolloutEntry = (id: string, obj: Record<string, unknown>) => ({
-    id,
-    parentId: null,
-    lineJson: JSON.stringify({ id, ...obj }),
-  });
-  const pushBody = (uuid: string, entries: unknown[]) =>
-    fetch(`${ctx.base}/api/v1/sessions/push`, {
-      method: "POST",
-      headers: headers(ctx),
-      body: JSON.stringify({ sessions: [{ uuid, cwd: "/proj", baseVersion: 0, entries, mtime: Date.now() }] }),
-    });
-
-  const stat = async () =>
-    ((await (await fetch(`${ctx.base}/api/v1/web/stats?days=all`, { headers: { authorization: `Bearer ${ctx.token}` } })).json()) as {
-      data: { byModel: Array<{ model: string; cost: number }> };
-    }).data.byModel.find((m) => m.model === "gpt-5.6-sol");
-
-  const reindex = (body: unknown) =>
-    fetch(`${ctx.base}/api/v1/web/sessions/reindex-usage`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
-      body: JSON.stringify(body),
-    });
-
-  // push 含 Codex token_count 的 rollout 会话：push 时已用新逻辑解析 → stats 已有金额
-  await pushBody("codex-sess", [
-    rolloutEntry("m0", { timestamp: ts, type: "session_meta", payload: { model_provider: "openai" } }),
-    rolloutEntry("t1", { timestamp: ts, type: "turn_context", payload: { turn_id: "t1", model: "gpt-5.6-sol" } }),
-    rolloutEntry("tc1", { timestamp: ts, type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 16587, cached_input_tokens: 15104, output_tokens: 219, total_tokens: 16806 } } } }),
-  ]);
-  let sol = await stat();
-  assert.ok(sol, "push 后应已统计 gpt-5.6-sol");
-  assert.ok(Math.abs((sol?.cost ?? 0) - 0.021537) < 1e-9);
-
-  // 全量 reindex：幂等，金额不变，不丢正文
-  const reAll = (await (await reindex({})).json()) as { data: { reindexed: number; usageRows: number; missing: string[] } };
-  assert.equal(reAll.data.reindexed, 1);
-  assert.equal(reAll.data.usageRows, 1);
-  assert.deepEqual(reAll.data.missing, []);
-  sol = await stat();
-  assert.ok(Math.abs((sol?.cost ?? 0) - 0.021537) < 1e-9, "reindex 后金额应不变");
-
-  // 指定 uuid reindex 同样幂等
-  const reOne = (await (await reindex({ uuids: ["codex-sess"] })).json()) as { data: { reindexed: number } };
-  assert.equal(reOne.data.reindexed, 1);
-
-  // 不存在的 uuid 计入 missing，不影响其他会话
-  const reMissing = (await (await reindex({ uuids: ["nope"] })).json()) as { data: { reindexed: number; missing: string[] } };
-  assert.equal(reMissing.data.reindexed, 0);
-  assert.deepEqual(reMissing.data.missing, ["nope"]);
-
-  // 正文仍在：会话未被标记删除/裁剪（再全量 reindex 仍命中该会话）
-  const reAgain = (await (await reindex({})).json()) as { data: { reindexed: number; skipped: number } };
-  assert.equal(reAgain.data.reindexed, 1);
-  assert.equal(reAgain.data.skipped, 0, "未裁剪会话不应被跳过");
 });
