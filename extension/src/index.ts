@@ -467,24 +467,28 @@ function registerEvents(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (!serverConfigured() || !cfg.sync.automatic || cfg.sync.onStartup !== "pull") return;
     const c = client();
-    pull(cfg, loadState(), c, {
-      skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
-      piExec: (args) => piExec(args),
-    })
-      .then((report) => {
-        if (report.errors.length > 0) {
-          ctx.ui.notify(`同步: ${report.errors.join("; ")}`, "warning");
-        }
-      })
-      .catch((err) => ctx.ui.notify(`同步失败: ${(err as Error).message}`, "error"));
+    try {
+      const report = await pull(cfg, loadState(), c, {
+        skipFile: ctx.sessionManager.getSessionFile() ?? undefined,
+        piExec: (args) => piExec(args),
+      });
+      if (report.errors.length > 0) {
+        ctx.ui.notify(`同步: ${report.errors.join("; ")}`, "warning");
+      }
+    } catch (err) {
+      ctx.ui.notify(`同步失败: ${(err as Error).message}`, "error");
+    }
   });
 
   // 自动推送（会话关闭/切换时）
-  pi.on("session_shutdown", () => {
+  // session_shutdown 在 /quit、Ctrl+C、Ctrl+D 及会话切换时触发；
+  // pi 全链路会 await handler 的返回值（emit → dispose → shutdown），
+  // 因此必须 await push 的 Promise，否则 process.exit 会杀掉正在飞的 HTTP 推送。
+  pi.on("session_shutdown", async () => {
     if (!serverConfigured() || !cfg.sync.automatic || cfg.sync.onShutdown !== "push") return;
     const c = client();
-    push(cfg, loadState(), c, "0.83.0", EXT_VERSION).catch(() => {
-      // 静默失败：进程可能即将退出
+    await push(cfg, loadState(), c, "0.83.0", EXT_VERSION).catch(() => {
+      // 推送失败不阻塞退出；pi 已 await，此处仅吞掉错误
     });
   });
 
