@@ -86,8 +86,10 @@ test("web console serves the upgraded dashboard shell", async (t) => {
   assert.match(res.headers.get("content-type") ?? "", /text\/html/);
   const html = await res.text();
   assert.match(html, /pi-cloud-sync · 控制台/);
-  assert.match(html, /data-view="devices"/);
+  assert.match(html, /x-data="consoleApp"/);
   assert.match(html, /id="conflictDialog"/);
+  assert.match(html, /@shoelace-style\/shoelace@2\.20\.1/);
+  assert.match(html, /alpinejs@3\.15\.12/);
   assert.match(html, /chart\.js@4\.4\.7/);
   assert.match(html, /marked@15\.0\.7/);
   assert.match(html, /dompurify@3\.2\.6/);
