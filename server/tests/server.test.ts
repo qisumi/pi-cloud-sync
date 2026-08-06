@@ -134,6 +134,11 @@ test("web console serves the upgraded dashboard shell", async (t) => {
   assert.doesNotMatch(html, /addEventListener\('popstate'/);
   assert.match(html, /FORBID_TAGS: \[[^\]]*'img'/);
   assert.match(html, /class="sidebar-settings"/);
+  assert.equal((html.match(/data-setting-select="theme"[^>]*value="system"/g) || []).length, 2);
+  assert.equal((html.match(/data-setting-select="currency"[^>]*value="cny"/g) || []).length, 2);
+  assert.match(html, /syncSettingSelects\(\).*option\.updateComplete.*select\.updateComplete/s);
+  assert.match(html, /Promise\.all\(\[customElements\.whenDefined\('sl-select'\), customElements\.whenDefined\('sl-option'\)\]\)/);
+  assert.match(html, /this\.currency = localStorage.*this\.syncSettingSelects\(\)/s);
   assert.match(html, /key: 'sessionDetail'.*requestKey: 'sessionDetail'/);
   assert.match(html, /else if \(key === 'sessionDetail'\) this\.detail = r\.value/);
   assert.doesNotMatch(html, /:class="\[group\.kind, \{/);

@@ -567,10 +567,10 @@
       <div class="server-card-meta" x-html="serverCardMeta"></div>
     </div>
     <div class="sidebar-settings">
-      <sl-select aria-label="界面主题" :value="theme" @sl-change="setTheme($event.target.value)">
+      <sl-select data-setting-select="theme" aria-label="界面主题" value="system" :value="theme" @sl-change="setTheme($event.target.value)">
         <sl-option value="system">跟随系统</sl-option><sl-option value="light">亮色</sl-option><sl-option value="dark">暗色</sl-option>
       </sl-select>
-      <sl-select aria-label="显示货币" :value="currency" @sl-change="setCurrency($event.target.value)">
+      <sl-select data-setting-select="currency" aria-label="显示货币" value="cny" :value="currency" @sl-change="setCurrency($event.target.value)">
         <sl-option value="cny">¥ 人民币</sl-option><sl-option value="usd">$ 美元</sl-option>
       </sl-select>
     </div>
@@ -592,12 +592,12 @@
       <div class="topbar-spacer"></div>
       <span class="updated-at" x-text="lastUpdated ? '更新于 ' + new Date(lastUpdated).toLocaleTimeString('zh-CN', { hour12: false }) : '尚未刷新'"></span>
       <span class="connection-pill"><span class="status-dot" :class="online ? 'online' : 'offline'"></span><span x-text="topHealthText"></span></span>
-      <sl-select aria-label="界面主题" :value="theme" @sl-change="setTheme($event.target.value)" style="width:130px">
+      <sl-select data-setting-select="theme" aria-label="界面主题" value="system" :value="theme" @sl-change="setTheme($event.target.value)" style="width:130px">
         <sl-option value="system">跟随系统</sl-option>
         <sl-option value="light">亮色</sl-option>
         <sl-option value="dark">暗色</sl-option>
       </sl-select>
-      <sl-select aria-label="显示货币" :value="currency" @sl-change="setCurrency($event.target.value)" style="width:120px">
+      <sl-select data-setting-select="currency" aria-label="显示货币" value="cny" :value="currency" @sl-change="setCurrency($event.target.value)" style="width:120px">
         <sl-option value="cny">¥ 人民币</sl-option>
         <sl-option value="usd">$ 美元</sl-option>
       </sl-select>
@@ -1094,8 +1094,24 @@ document.addEventListener('alpine:init', function () {
         const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = dark ? '#0b111b' : '#f3f6f8';
         if (this.stats) this.$nextTick(() => this.renderTrend());
       },
-      setTheme(v) { this.theme = v; try { localStorage.setItem(THEME_KEY, v); } catch (_) { } this.applyTheme(); },
-      setCurrency(v) { this.currency = v === 'usd' ? 'usd' : 'cny'; try { localStorage.setItem(CURRENCY_KEY, this.currency); } catch (_) { } this.refreshIcons(); if (this.stats && this.trendMetric === 'cost') this.$nextTick(() => this.renderTrend()); },
+      syncSettingSelects() {
+        const values = { theme: this.theme || 'system', currency: this.currency === 'usd' ? 'usd' : 'cny' };
+        const sync = async () => {
+          const selects = Array.from(document.querySelectorAll('sl-select[data-setting-select]'));
+          const options = selects.flatMap(select => Array.from(select.querySelectorAll('sl-option')));
+          await Promise.all(options.map(option => option.updateComplete).filter(Boolean));
+          await Promise.all(selects.map(select => select.updateComplete).filter(Boolean));
+          selects.forEach(select => {
+            const value = values[select.dataset.settingSelect];
+            if (value && select.value !== value) select.value = value;
+          });
+        };
+        this.$nextTick(() => sync());
+        Promise.all([customElements.whenDefined('sl-select'), customElements.whenDefined('sl-option')])
+          .then(() => this.$nextTick(() => requestAnimationFrame(() => sync())));
+      },
+      setTheme(v) { this.theme = ['system', 'light', 'dark'].includes(v) ? v : 'system'; try { localStorage.setItem(THEME_KEY, this.theme); } catch (_) { } this.syncSettingSelects(); this.applyTheme(); },
+      setCurrency(v) { this.currency = v === 'usd' ? 'usd' : 'cny'; try { localStorage.setItem(CURRENCY_KEY, this.currency); } catch (_) { } this.syncSettingSelects(); this.refreshIcons(); if (this.stats && this.trendMetric === 'cost') this.$nextTick(() => this.renderTrend()); },
 
       // ============ 认证 ============
       async connect() {
@@ -1485,6 +1501,7 @@ document.addEventListener('alpine:init', function () {
         this.autoRefresh = localStorage.getItem(AUTO_KEY) === '1';
         this.theme = localStorage.getItem(THEME_KEY) || 'system';
         this.currency = localStorage.getItem(CURRENCY_KEY) === 'usd' ? 'usd' : 'cny';
+        this.syncSettingSelects();
         this.applyTheme();
         if (this.autoRefresh) this.toggleAutoRefresh(true);
         this.refreshUsdCnyRate();
