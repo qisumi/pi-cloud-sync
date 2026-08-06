@@ -148,13 +148,17 @@
 
   /* Shoelace 微调：输入/下拉贴合密度 */
   sl-input, sl-select, sl-textarea { --sl-input-height-medium: 38px; --sl-focus-ring-width: 3px; }
-  sl-input::part(base), sl-select::part(control), sl-textarea::part(base) {
+  sl-input::part(base), sl-select::part(combobox), sl-textarea::part(base) {
     border-radius: var(--radius-sm); background: var(--surface-raised); color: var(--text); border-color: var(--border);
   }
-  sl-input::part(base):focus-within, sl-select::part(control):focus-within, sl-textarea::part(base):focus-within {
+  sl-input::part(base):focus-within, sl-select::part(combobox):focus-within, sl-textarea::part(base):focus-within {
     border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); background: var(--surface);
   }
-  sl-select[size="small"]::part(control) { --sl-input-height-small: 31px; }
+  sl-select::part(combobox), sl-select::part(listbox) { border-radius: 7px; }
+  sl-select::part(listbox) { padding-block: 4px; }
+  sl-select[open]::part(combobox) { border-radius: 7px 7px 0 0; }
+  sl-select[open]::part(listbox) { border-radius: 0 0 7px 7px; }
+  sl-select[size="small"]::part(combobox) { --sl-input-height-small: 31px; }
   sl-button { --sl-button-font-size-medium: 13px; --sl-button-font-weight-medium: 620; }
   sl-button.small { --sl-button-font-size-small: 12px; }
   sl-button::part(base) { border-radius: var(--radius-sm); }
@@ -307,7 +311,10 @@
   @keyframes grow { from { transform: scaleX(0); } }
   .bar-value { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; text-align: right; }
   sl-details.breakdown { margin-top: 15px; border-top: 1px solid var(--border); --sl-spacing-medium: 0; }
-  sl-details.breakdown::part(header) { padding: 11px 0 0; font-size: 11px; color: var(--muted); }
+  sl-details.breakdown::part(base) { border: 0; border-radius: 0; background: transparent; }
+  sl-details.breakdown::part(header) { min-height: 0; padding: 10px 2px 8px; color: var(--muted); font-size: 11px; }
+  sl-details.breakdown::part(summary-icon) { color: var(--muted); }
+  sl-details.breakdown[open]::part(header) { color: var(--text-soft); }
   .table-scroll { overflow: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
   th, td { padding: 10px 11px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -791,7 +798,7 @@
             <div class="message-list">
               <template x-if="!messageGroups.length"><div class="card empty"><span><span class="empty-glyph"><i data-lucide="search" aria-hidden="true">⌕</i></span><span x-text="detail && detail.contentPruned ? '正文已删除，用量摘要仍保留在总览中' : '本页没有匹配的对话消息'"></span></span></div></template>
               <template x-for="group in messageGroups" :key="group.key">
-                <article class="message" :class="[group.kind, { collapsible: group.collapsible, expanded: !!messageExpanded[group.key] }]">
+                <article class="message" :class="{ user: group.kind === 'user', assistant: group.kind === 'assistant', collapsible: group.collapsible, expanded: !!messageExpanded[group.key] }">
                   <div class="message-head">
                     <span class="role-chip" x-text="group.kind === 'user' ? '用户' : '助手'"></span>
                     <template x-if="group.technical"><span class="message-meta" x-text="group.technical"></span></template>
@@ -801,7 +808,7 @@
                     <span class="message-actions"><sl-button class="small" @click="copyText(group.combined)">复制</sl-button></span>
                   </div>
                   <div class="message-body markdown-body" :class="{ 'message-empty': !group.combined }" x-html="group.bodyHtml"></div>
-                  <template x-if="group.collapsible"><button class="pagebtn message-expand" @click="messageExpanded[group.key] = !messageExpanded[group.key]" x-text="messageExpanded[group.key] ? '收起全文' : '展开全文'"></button></template>
+                  <template x-if="group.collapsible"><button class="pagebtn message-expand" :aria-expanded="!!messageExpanded[group.key]" @click="toggleMessageExpanded(group.key)" x-text="messageExpanded[group.key] ? '收起全文' : '展开全文'"></button></template>
                 </article>
               </template>
             </div>
@@ -1326,6 +1333,9 @@ document.addEventListener('alpine:init', function () {
           const bodyHtml = items.map((it, i) => (i > 0 ? '<hr class="merge-divider">' : '') + this.markdownHtml(it.entry.text || '无文本内容')).join('');
           return { kind: group.kind, key, items, expanded: !!this.messageExpanded[key], usage, technical, timeLabel, combined, collapsible, bodyHtml };
         });
+      },
+      toggleMessageExpanded(key) {
+        this.messageExpanded = Object.assign({}, this.messageExpanded, { [key]: !this.messageExpanded[key] });
       },
       openDeleteDialog() { if (!this.selectedSessions.size) return; this.$refs.deleteDialog.show(); },
       async deleteSelectedSessions() {

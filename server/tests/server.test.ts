@@ -95,6 +95,12 @@ test("web console serves the upgraded dashboard shell", async (t) => {
   assert.doesNotMatch(html, /\? 'yen' :/);
   assert.match(html, /:key="metric\.label \+ ':' \+ metric\.glyph"/);
   assert.match(html, /setCurrency\(v\).*this\.refreshIcons\(\).*this\.renderTrend\(\)/);
+  assert.match(html, /sl-select::part\(combobox\)/);
+  assert.doesNotMatch(html, /sl-select::part\(control\)/);
+  assert.match(html, /sl-details\.breakdown::part\(base\) \{ border: 0; border-radius: 0;/);
+  assert.match(html, /expanded: !!messageExpanded\[group\.key\]/);
+  assert.match(html, /toggleMessageExpanded\(group\.key\)/);
+  assert.doesNotMatch(html, /:class="\[group\.kind, \{/);
   assert.match(html, /alpinejs@3\.15\.12/);
   assert.match(html, /chart\.js@4\.4\.7/);
   assert.match(html, /marked@15\.0\.7/);
