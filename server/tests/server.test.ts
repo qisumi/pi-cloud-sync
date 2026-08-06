@@ -89,6 +89,12 @@ test("web console serves the upgraded dashboard shell", async (t) => {
   assert.match(html, /x-data="consoleApp"/);
   assert.match(html, /id="conflictDialog"/);
   assert.match(html, /@shoelace-style\/shoelace@2\.20\.1/);
+  assert.match(html, /\/cdn\/shoelace-autoloader\.js/);
+  assert.doesNotMatch(html, /\/dist\/shoelace\.js/);
+  assert.match(html, /glyph: this\.currency === 'cny' \? 'japanese-yen' : 'circle-dollar-sign'/);
+  assert.doesNotMatch(html, /\? 'yen' :/);
+  assert.match(html, /:key="metric\.label \+ ':' \+ metric\.glyph"/);
+  assert.match(html, /setCurrency\(v\).*this\.refreshIcons\(\).*this\.renderTrend\(\)/);
   assert.match(html, /alpinejs@3\.15\.12/);
   assert.match(html, /chart\.js@4\.4\.7/);
   assert.match(html, /marked@15\.0\.7/);

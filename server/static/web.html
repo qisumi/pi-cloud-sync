@@ -15,7 +15,7 @@
 <!-- 新增：Shoelace 组件库（主题 + autoloader） -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/dist/themes/light.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/dist/themes/dark.css">
-<script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/dist/shoelace.js"></script>
+<script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
 <!-- 新增：Alpine.js 响应式层 -->
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"></script>
 <style>
@@ -632,7 +632,7 @@
           <template x-if="!stats">
             <div class="skeleton"></div>
           </template>
-          <template x-for="metric in metrics" :key="metric.label">
+          <template x-for="metric in metrics" :key="metric.label + ':' + metric.glyph">
             <article class="metric" :style="`--metric-color:${metric.color};--metric-soft:${metric.soft}`">
               <div class="metric-top"><span class="metric-label" x-text="metric.label"></span><span class="metric-icon"><i :data-lucide="metric.glyph" aria-hidden="true"></i></span></div>
               <div class="metric-value" x-text="metric.value"></div>
@@ -1073,7 +1073,7 @@ document.addEventListener('alpine:init', function () {
         if (this.stats) this.$nextTick(() => this.renderTrend());
       },
       setTheme(v) { this.theme = v; try { localStorage.setItem(THEME_KEY, v); } catch (_) { } this.applyTheme(); },
-      setCurrency(v) { this.currency = v === 'usd' ? 'usd' : 'cny'; try { localStorage.setItem(CURRENCY_KEY, this.currency); } catch (_) { } },
+      setCurrency(v) { this.currency = v === 'usd' ? 'usd' : 'cny'; try { localStorage.setItem(CURRENCY_KEY, this.currency); } catch (_) { } this.refreshIcons(); if (this.stats && this.trendMetric === 'cost') this.$nextTick(() => this.renderTrend()); },
 
       // ============ 认证 ============
       async connect() {
@@ -1207,7 +1207,7 @@ document.addEventListener('alpine:init', function () {
         const cachePct = sum.totalTokens ? Math.min(100, (sum.cacheRead / sum.totalTokens) * 100) : 0;
         return [
           { label: '总 Tokens', value: this.fmtNum(sum.totalTokens), detail: '输入 ' + this.fmtNum(sum.input) + ' · 输出 ' + this.fmtNum(sum.output), glyph: 'binary', color: 'var(--brand)', soft: 'var(--brand-soft)' },
-          { label: '估算费用', value: this.fmtCost(sum.cost), detail: '按消息中的模型计价', glyph: this.currency === 'cny' ? 'yen' : 'circle-dollar-sign', color: 'var(--amber)', soft: 'var(--amber-soft)' },
+          { label: '估算费用', value: this.fmtCost(sum.cost), detail: '按消息中的模型计价', glyph: this.currency === 'cny' ? 'japanese-yen' : 'circle-dollar-sign', color: 'var(--amber)', soft: 'var(--amber-soft)' },
           { label: '请求次数', value: this.fmtNum(sum.requests), detail: sum.sessions + ' 个活跃会话', glyph: 'arrow-up-right', color: 'var(--violet)', soft: 'var(--violet-soft)' },
           { label: '缓存读取', value: this.fmtNum(sum.cacheRead), detail: cachePct.toFixed(1) + '% token 占比', glyph: 'database', color: 'var(--blue)', soft: 'var(--blue-soft)' },
           { label: '客户端', value: this.fmtNum(sum.devices), detail: this.stats.byModel.length + ' 个模型', glyph: 'monitor', color: 'var(--green)', soft: 'var(--green-soft)' }
