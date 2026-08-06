@@ -1308,17 +1308,14 @@ document.addEventListener('alpine:init', function () {
         const color = metric === 'cost' ? styles.getPropertyValue('--amber').trim() : metric === 'requests' ? styles.getPropertyValue('--violet').trim() : styles.getPropertyValue('--brand').trim();
         const muted = styles.getPropertyValue('--muted').trim(), border = styles.getPropertyValue('--border').trim(), surface = styles.getPropertyValue('--surface-raised').trim();
         const labels = points.map(r => r.date.slice(5));
-        const tooltipLabel = ctx => { const v = ctx.raw; return metric === 'cost' ? ' 费用 ' + this.fmtCost(v) : metric === 'requests' ? ' 请求 ' + this.fmtFull(v) : ' Tokens ' + this.fmtFull(v); };
-        const yTick = v => metric === 'cost' ? this.fmtCost(v) : this.fmtNum(v);
-        // 复用已有图表实例：仅切换数据/颜色/刻度回调，避免快速点击时 destroy+recreate 与 420ms 动画竞态导致画布空白
+        // 复用已有图表实例：仅更新数据与配色，回调按 this.trendMetric 动态读取（无需改 options），
+        // 避免快速点击时 destroy+recreate 与 420ms 动画竞态导致画布空白
         if (this.chartInstance && host.querySelector('canvas')) {
           const c = this.chartInstance;
           c.data.labels = labels;
           c.data.datasets[0].data = values;
           c.data.datasets[0].backgroundColor = color + '99';
           c.data.datasets[0].borderColor = color;
-          c.options.plugins.tooltip.callbacks.label = tooltipLabel;
-          c.options.scales.y.ticks.callback = yTick;
           c.update();
           return;
         }
@@ -1329,10 +1326,10 @@ document.addEventListener('alpine:init', function () {
           data: { labels, datasets: [{ data: values, backgroundColor: color + '99', borderColor: color, borderWidth: 1, borderRadius: 2, borderSkipped: 'bottom', maxBarThickness: 30 }] },
           options: {
             responsive: true, maintainAspectRatio: false, animation: { duration: 420 }, interaction: { intersect: false, mode: 'index' },
-            plugins: { legend: { display: false }, tooltip: { backgroundColor: surface, titleColor: styles.getPropertyValue('--text').trim(), bodyColor: muted, borderColor: border, borderWidth: 1, padding: 11, callbacks: { label: tooltipLabel } } },
+            plugins: { legend: { display: false }, tooltip: { backgroundColor: surface, titleColor: styles.getPropertyValue('--text').trim(), bodyColor: muted, borderColor: border, borderWidth: 1, padding: 11, callbacks: { label: ctx => { const v = ctx.raw; const m = this.trendMetric; return m === 'cost' ? ' 费用 ' + this.fmtCost(v) : m === 'requests' ? ' 请求 ' + this.fmtFull(v) : ' Tokens ' + this.fmtFull(v); } } } },
             scales: {
               x: { grid: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12, font: { size: 10 } }, border: { display: false } },
-              y: { beginAtZero: true, grid: { color: border, drawTicks: false }, border: { display: false }, ticks: { color: muted, padding: 8, font: { size: 10 }, callback: yTick } }
+              y: { beginAtZero: true, grid: { color: border, drawTicks: false }, border: { display: false }, ticks: { color: muted, padding: 8, font: { size: 10 }, callback: v => { const m = this.trendMetric; return m === 'cost' ? this.fmtCost(v) : this.fmtNum(v); } } }
             }
           }
         });
