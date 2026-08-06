@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseUsageHit } from "./usage.js";
+import { usageCostUsd } from "./pricing.js";
 
 /** SQLite 数据库封装：schema 初始化 + 通用访问 */
 export class SyncDb {
@@ -195,6 +196,7 @@ export class SyncDb {
       CREATE INDEX IF NOT EXISTS idx_session_usage_device_time ON session_usage(source_device_id, occurred_at);
     `);
     this.backfillV2();
+    this.backfillEstimatedCosts();
     this.db.pragma("optimize");
   }
 
@@ -328,6 +330,53 @@ export class SyncDb {
         for (const entry of entries) touch.run(entry.session_uuid, entry.entry_id, "entry", "insert");
       }
       this.db.prepare(`INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_v2_backfilled', '1')`).run();
+    });
+    tx();
+  }
+
+  /** 为历史 GLM-5.2 零费用记录补上按量估算，并同步会话汇总。 */
+  private backfillEstimatedCosts() {
+    const rows = this.db
+      .prepare(
+        `SELECT rowid, session_uuid, provider, model, input_tokens, output_tokens, cache_read, cache_write
+         FROM session_usage WHERE cost = 0 AND lower(model) LIKE '%5%2%'`,
+      )
+      .all() as Array<{
+      rowid: number;
+      session_uuid: string;
+      provider: string;
+      model: string;
+      input_tokens: number;
+      output_tokens: number;
+      cache_read: number;
+      cache_write: number;
+    }>;
+    if (rows.length === 0) return;
+    const update = this.db.prepare(`UPDATE session_usage SET cost = ? WHERE rowid = ? AND cost = 0`);
+    const touched = new Set<string>();
+    const tx = this.db.transaction(() => {
+      for (const row of rows) {
+        const cost = usageCostUsd(
+          {
+            provider: row.provider,
+            model: row.model,
+            input: row.input_tokens,
+            output: row.output_tokens,
+            cacheRead: row.cache_read,
+            cacheWrite: row.cache_write,
+          },
+          0,
+        );
+        if (cost <= 0) continue;
+        update.run(cost, row.rowid);
+        touched.add(row.session_uuid);
+      }
+      const refresh = this.db.prepare(
+        `UPDATE session_headers SET total_cost =
+           (SELECT COALESCE(SUM(cost), 0) FROM session_usage WHERE session_uuid = ?)
+         WHERE uuid = ?`,
+      );
+      for (const uuid of touched) refresh.run(uuid, uuid);
     });
     tx();
   }

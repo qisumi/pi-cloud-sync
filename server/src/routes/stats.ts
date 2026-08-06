@@ -67,6 +67,15 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
          GROUP BY label ORDER BY label`,
       )
       .all(...params) as Array<AggregateRow & { label: string }>;
+    const hourRows = days === 1
+      ? (dbs.db
+          .prepare(
+            `SELECT strftime('%Y-%m-%d %H:00', occurred_at / 1000, 'unixepoch', 'localtime') AS label,
+               ${aggregateColumns} FROM session_usage u ${where}
+             GROUP BY label ORDER BY label`,
+          )
+          .all(...params) as Array<AggregateRow & { label: string }>)
+      : [];
     const modelRows = dbs.db
       .prepare(
         `SELECT CASE WHEN model = '' THEN '(unknown)' ELSE model END AS label,
@@ -116,6 +125,7 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
           devices: summary.devices,
         },
         byDay: dayRows.map((row) => ({ date: row.label, ...base(row) })),
+        byHour: hourRows.map((row) => ({ date: row.label, ...base(row) })),
         byModel: modelRows.map((row) => ({ model: row.label, ...base(row) })),
         byDevice: deviceRows.map((row) => ({ deviceId: row.device_id, device: row.label, ...base(row) })),
         devices: devices.map((row) => ({ deviceId: row.device_id, name: row.name })),

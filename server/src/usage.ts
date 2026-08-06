@@ -1,3 +1,5 @@
+import { usageCostUsd } from "./pricing.js";
+
 export interface UsageHit {
   entryId: string;
   ts: number;
@@ -47,7 +49,8 @@ export function parseUsageHit(line: string, sourceDevice: string, sessionUuid: s
     const cacheWrite = Number(usage.cacheWrite ?? 0) || 0;
     const total = Number(usage.totalTokens ?? 0) || input + output + cacheRead + cacheWrite;
     const costObject = (usage.cost ?? {}) as Record<string, unknown>;
-    const cost = Number(costObject.total ?? 0) || 0;
+    const reportedCost = Number(costObject.total ?? 0) || 0;
+    const cost = usageCostUsd({ provider, model, input, output, cacheRead, cacheWrite }, reportedCost);
     if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && total === 0 && cost === 0) return null;
 
     return {

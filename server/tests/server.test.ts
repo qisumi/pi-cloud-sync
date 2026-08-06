@@ -6,6 +6,24 @@ import type { FastifyInstance } from "fastify";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { USD_CNY_REFERENCE, usageCostUsd } from "../src/pricing.js";
+
+test("GLM-5.2 zero-cost usage falls back to the published token pricing", () => {
+  const estimated = usageCostUsd(
+    {
+      provider: "zai-coding-cn",
+      model: "glm-5.2-high",
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheWrite: 1_000_000,
+    },
+    0,
+  );
+  assert.equal(Math.round(estimated * USD_CNY_REFERENCE), 46);
+  assert.equal(usageCostUsd({ provider: "zai", model: "glm-5.2", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.25), 0.25);
+  assert.equal(usageCostUsd({ provider: "test-provider", model: "glm-5.2", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
+});
 
 interface TestCtx {
   app: FastifyInstance;
@@ -100,6 +118,8 @@ test("web console serves the upgraded dashboard shell", async (t) => {
   assert.match(html, /sl-details\.breakdown::part\(base\) \{ border: 0; border-radius: 0;/);
   assert.match(html, /expanded: !!messageExpanded\[group\.key\]/);
   assert.match(html, /toggleMessageExpanded\(group\.key\)/);
+  assert.match(html, /get trendTitle\(\).*每小时趋势.*每日趋势/);
+  assert.match(html, /this\.stats\.byHour/);
   assert.doesNotMatch(html, /:class="\[group\.kind, \{/);
   assert.match(html, /alpinejs@3\.15\.12/);
   assert.match(html, /chart\.js@4\.4\.7/);
@@ -703,7 +723,7 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
   const ctx = await boot();
   t.after(async () => { await ctx.stop(); });
 
-  const usageEntry = (id: string, ts: string, role: string, model: string, usage: unknown) => ({
+  const usageEntry = (id: string, ts: string, role: string, model: string, usage: unknown, provider = "test-provider") => ({
     id,
     parentId: null,
     lineJson: JSON.stringify({
@@ -711,7 +731,7 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
       id,
       parentId: null,
       timestamp: ts,
-      message: { role, provider: "test-provider", model, usage },
+      message: { role, provider, model, usage },
     }),
   });
   const pushSessions = async (deviceName: string, sessions: unknown[]) => {
@@ -800,6 +820,24 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
   });
   const last1dJson = (await last1d.json()) as { data: { summary: { requests: number } } };
   assert.equal(last1dJson.data.summary.requests, 0);
+
+  // 1 天范围按小时聚合；GLM-5.2 的零费用按官方价格估算。
+  const now = Date.now();
+  await pushSessions("dev-glm", [{
+    uuid: "stats-sess-glm",
+    cwd: "/proj-glm",
+    baseVersion: 0,
+    entries: [
+      usageEntry("g1", new Date(now - 70 * 60_000).toISOString(), "assistant", "glm-5.2", { input: 1_000_000, output: 0, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
+      usageEntry("g2", new Date(now - 5 * 60_000).toISOString(), "assistant", "glm-5.2-high", { input: 0, output: 1_000_000, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
+    ],
+    mtime: now,
+  }]);
+  const hourly = await fetch(`${ctx.base}/api/v1/web/stats?days=1`, { headers: headers(ctx) });
+  const hourlyJson = (await hourly.json()) as { data: { summary: { cost: number }; byHour: Array<{ date: string; total: number }> } };
+  assert.equal(hourlyJson.data.byHour.length, 2);
+  assert.match(hourlyJson.data.byHour[0].date, /^\d{4}-\d{2}-\d{2} \d{2}:00$/);
+  assert.equal(Math.round(hourlyJson.data.summary.cost * USD_CNY_REFERENCE), 36);
 
   // 未认证 → 401
   const denied = await fetch(`${ctx.base}/api/v1/web/stats`);

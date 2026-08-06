@@ -151,7 +151,7 @@ tokens(id INTEGER PK AUTOINCREMENT, name TEXT, token TEXT UNIQUE, created_at INT
 | GET  | `/web/sessions` | 网页端会话列表（分页/筛选） |
 | GET  | `/web/sessions/:uuid` | 会话详情（过滤工具消息） |
 | POST | `/web/sessions/delete` | 批量删除会话正文 |
-| GET  | `/web/stats` | 网页端用量趋势与分布 |
+| GET  | `/web/stats` | 网页端用量趋势与分布（`days=1` 同时返回小时分桶） |
 
 ## 插件配置（~/.pi/agent/pi-sync.json，version 5）
 

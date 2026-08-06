@@ -650,7 +650,7 @@
 
         <div class="dashboard-grid">
           <article class="card">
-            <div class="card-head"><div class="card-title"><span class="card-title-mark"></span><div><h3>每日趋势</h3><p x-text="trendCaption"></p></div></div></div>
+            <div class="card-head"><div class="card-title"><span class="card-title-mark"></span><div><h3 x-text="trendTitle">每日趋势</h3><p x-text="trendCaption"></p></div></div></div>
             <div class="card-body"><div class="chart-wrap" x-ref="trendChart"><div class="empty"><span><span class="empty-glyph"><i data-lucide="activity" aria-hidden="true">⌁</i></span>正在加载趋势…</span></div></div></div>
           </article>
           <article class="card">
@@ -1232,11 +1232,13 @@ document.addEventListener('alpine:init', function () {
       clearFilters() { this.device = ''; this.model = ''; this.refreshStats(); },
 
       downsample(points, max) { if (points.length <= max) return points; const size = Math.ceil(points.length / max); const out = []; for (let i = 0; i < points.length; i += size) { const chunk = points.slice(i, i + size); out.push({ date: chunk[0].date, total: chunk.reduce((s, r) => s + (r.total || 0), 0), cost: chunk.reduce((s, r) => s + (r.cost || 0), 0), requests: chunk.reduce((s, r) => s + (r.requests || 0), 0) }); } return out; },
+      get trendTitle() { return Number(this.days) === 1 ? '每小时趋势' : '每日趋势'; },
       get trendCaption() { return this._trendCaption || '等待数据'; },
       renderTrend() {
         if (!this.stats) return;
         const host = this.$refs.trendChart; if (!host) return;
-        const points = this.downsample(this.stats.byDay, 80);
+        const hourly = Number(this.days) === 1;
+        const points = this.downsample(hourly ? (this.stats.byHour || []) : this.stats.byDay, 80);
         if (this.chartInstance) { this.chartInstance.destroy(); this.chartInstance = null; }
         if (!points.length) { host.innerHTML = '<div class="empty"><span><span class="empty-glyph"><i data-lucide="activity" aria-hidden="true">⌁</i></span>当前范围内暂无用量数据</span></div>'; this._trendCaption = '没有可展示的数据'; this.refreshIcons(); return; }
         const metric = this.trendMetric;
@@ -1244,7 +1246,7 @@ document.addEventListener('alpine:init', function () {
         const total = values.reduce((s, v) => s + v, 0);
         this._trendCaption = '合计 ' + (metric === 'cost' ? this.fmtCost(total) : metric === 'requests' ? this.fmtFull(total) + ' 次请求' : this.fmtFull(total) + ' tokens');
         if (!window.Chart) { const max = Math.max.apply(Math, values.concat([1])); host.innerHTML = '<div class="chart-fallback">' + values.map((v, i) => '<div class="chart-fallback-bar" title="' + this.esc(points[i].date + ' · ' + v) + '" style="height:' + Math.max(2, v / max * 100).toFixed(1) + '%"></div>').join('') + '</div><div class="result-note">图表库未加载，已显示简化趋势。</div>'; return; }
-        host.innerHTML = '<canvas role="img" aria-label="每日用量趋势"></canvas>';
+        host.innerHTML = '<canvas role="img" aria-label="' + (hourly ? '每小时' : '每日') + '用量趋势"></canvas>';
         const styles = getComputedStyle(document.documentElement);
         const color = metric === 'cost' ? styles.getPropertyValue('--amber').trim() : metric === 'requests' ? styles.getPropertyValue('--violet').trim() : styles.getPropertyValue('--brand').trim();
         const muted = styles.getPropertyValue('--muted').trim(), border = styles.getPropertyValue('--border').trim(), surface = styles.getPropertyValue('--surface-raised').trim();

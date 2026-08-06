@@ -9,6 +9,7 @@ import type {
   UsageEventChange,
 } from "@pi-cloud-sync/shared";
 import { parseUsageHit } from "./usage.js";
+import { usageCostUsd } from "./pricing.js";
 
 export interface SessionMergeResult {
   merged: MergedSession;
@@ -496,7 +497,7 @@ export function mergeUsageEvents(
       event.cacheRead,
       event.cacheWrite,
       event.totalTokens,
-      event.cost,
+      usageCostUsd(event, event.cost),
     );
     if (result.changes > 0) {
       accepted++;
