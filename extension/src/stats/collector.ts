@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentDir } from "../config.js";
+import { estimateUsageCostUsd } from "./pricing.js";
 
 export const STATS_FILE = "pi-stats.jsonl";
 
@@ -104,7 +105,17 @@ export class UsageCollector {
       cacheRead: usage.cacheRead ?? 0,
       cacheWrite: usage.cacheWrite ?? 0,
       totalTokens: usage.totalTokens ?? 0,
-      cost: usage.cost?.total ?? 0,
+      cost: estimateUsageCostUsd(
+        {
+          provider: input.provider,
+          model: input.model,
+          input: usage.input ?? 0,
+          output: usage.output ?? 0,
+          cacheRead: usage.cacheRead ?? 0,
+          cacheWrite: usage.cacheWrite ?? 0,
+        },
+        usage.cost?.total ?? 0,
+      ),
       requests: 1,
       device: input.device ?? "",
       source: "live",

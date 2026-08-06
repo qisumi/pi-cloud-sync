@@ -25,6 +25,24 @@ test("GLM-5.2 zero-cost usage falls back to the published token pricing", () => 
   assert.equal(usageCostUsd({ provider: "test-provider", model: "glm-5.2", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
 });
 
+test("MiMo v2.5 / v2.5 Pro zero-cost usage falls back to published token pricing", () => {
+  // 国内按量价（元/百万 tokens）：v2.5 in1/out2/cr0.02/cw0；pro in3/out6/cr0.025
+  const v25 = usageCostUsd(
+    { provider: "xiaomi-token-plan-cn", model: "mimo-v2.5", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(v25 * USD_CNY_REFERENCE - 3.02) < 1e-6);
+  const pro = usageCostUsd(
+    { provider: "xiaomi-token-plan-cn", model: "mimo-v2.5-pro", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(pro * USD_CNY_REFERENCE - 9.025) < 1e-6);
+  // 渠道上报非零费用优先，不被估算覆盖
+  assert.equal(usageCostUsd({ provider: "xiaomi", model: "mimo-v2.5", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.5), 0.5);
+  // 已下线的 mimo-v2-pro 不在估算表内 → 0
+  assert.equal(usageCostUsd({ provider: "xiaomi", model: "mimo-v2-pro", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
+});
+
 interface TestCtx {
   app: FastifyInstance;
   base: string;

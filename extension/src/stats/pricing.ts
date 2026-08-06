@@ -1,41 +1,29 @@
 /**
- * 服务器内部费用统一按 USD 保存。部分套餐渠道（GLM-5.2 Coding Plan、
- * Xiaomi MiMo Token Plan）将模型价格上报为 0，因此使用厂商公开的国内按量价
- * 做估算，再按控制台构建时汇率换算。
+ * 用量费用补算（客户端 /qisumi-usage 视图）。
+ *
+ * pi 按模型 cost 配置计算 usage.cost.total；部分套餐渠道（GLM-5.2 Coding
+ * Plan、Xiaomi MiMo Token Plan）把模型价格上报为 0，导致 pi 算出的费用恒为
+ * 0。这里按厂商公开的国内按量价做估算，再按固定汇率换算成 USD，与
+ * server/src/pricing.ts 保持一致——确保客户端与控制台金额口径统一。
+ *
+ * 仅当渠道上报费用为 0 / 缺失时才估算；非零费用原样保留，绝不覆盖。
  */
 export const USD_CNY_REFERENCE = 6.762932;
 
-/** 估算定价：CNY / 百万 tokens（来自各厂商公开的国内按量计费价） */
 interface EstimatedModelPricing {
-  /** 展示名，便于调试与日志 */
   name: string;
   cnyPerMillion: { input: number; output: number; cacheRead: number; cacheWrite: number };
   match: (provider: string, model: string) => boolean;
 }
 
 /** 智谱 GLM-5.2（开放平台按量价，元/百万 tokens） */
-const GLM_52_CNY_PER_MILLION = {
-  input: 8,
-  output: 28,
-  cacheRead: 2,
-  cacheWrite: 8,
-} as const;
+const GLM_52_CNY_PER_MILLION = { input: 8, output: 28, cacheRead: 2, cacheWrite: 8 } as const;
 
 /** 小米 MiMo v2.5（国内按量价，元/百万 tokens；缓存写入限时免费） */
-const MIMO_V25_CNY_PER_MILLION = {
-  input: 1,
-  output: 2,
-  cacheRead: 0.02,
-  cacheWrite: 0,
-} as const;
+const MIMO_V25_CNY_PER_MILLION = { input: 1, output: 2, cacheRead: 0.02, cacheWrite: 0 } as const;
 
 /** 小米 MiMo v2.5 Pro（国内按量价，元/百万 tokens；缓存写入限时免费） */
-const MIMO_V25_PRO_CNY_PER_MILLION = {
-  input: 3,
-  output: 6,
-  cacheRead: 0.025,
-  cacheWrite: 0,
-} as const;
+const MIMO_V25_PRO_CNY_PER_MILLION = { input: 3, output: 6, cacheRead: 0.025, cacheWrite: 0 } as const;
 
 export interface UsageForPricing {
   provider: string;
@@ -69,10 +57,7 @@ export function isMimoV25Usage(provider: string, model: string): boolean {
   return isMimo && m.includes("mimo") && m.includes("v2.5") && !m.includes("pro");
 }
 
-/**
- * 已知「套餐上报 0 费用」的模型及其公开按量价。
- * 顺序敏感：Pro 变体必须排在标准 v2.5 之前（标准变体已排除 pro，此处双保险）。
- */
+/** 顺序敏感：Pro 变体必须排在标准 v2.5 之前（标准变体已排除 pro，此处双保险）。 */
 const ESTIMATED_PRICING: EstimatedModelPricing[] = [
   { name: "MiMo v2.5 Pro", cnyPerMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
   { name: "MiMo v2.5", cnyPerMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
@@ -80,10 +65,10 @@ const ESTIMATED_PRICING: EstimatedModelPricing[] = [
 ];
 
 /**
- * 保留渠道上报的非零费用；仅为已知套餐模型（MiMo v2.5 系列 / GLM-5.2）的
- * 零费用记录按公开按量价提供估算。
+ * 渠道上报费用非零则保留；否则按已知套餐模型（MiMo v2.5 系列 / GLM-5.2）的
+ * 公开按量价估算，返回 USD。
  */
-export function usageCostUsd(usage: UsageForPricing, reportedCost: number): number {
+export function estimateUsageCostUsd(usage: UsageForPricing, reportedCost: number): number {
   if (Number.isFinite(reportedCost) && reportedCost > 0) return reportedCost;
   for (const pricing of ESTIMATED_PRICING) {
     if (pricing.match(usage.provider, usage.model)) {

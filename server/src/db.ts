@@ -334,12 +334,12 @@ export class SyncDb {
     tx();
   }
 
-  /** 为历史 GLM-5.2 零费用记录补上按量估算，并同步会话汇总。 */
+  /** 为历史 GLM-5.2 / MiMo v2.5 系列零费用记录补上按量估算，并同步会话汇总。 */
   private backfillEstimatedCosts() {
     const rows = this.db
       .prepare(
         `SELECT rowid, session_uuid, provider, model, input_tokens, output_tokens, cache_read, cache_write
-         FROM session_usage WHERE cost = 0 AND lower(model) LIKE '%5%2%'`,
+         FROM session_usage WHERE cost = 0 AND (lower(model) LIKE '%5%2%' OR lower(model) LIKE '%mimo%')`,
       )
       .all() as Array<{
       rowid: number;

@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import { sessionsDir } from "../sync/sessions.js";
 import { agentDir } from "../config.js";
 import type { UsageRecord, UsageInput } from "./collector.js";
+import { estimateUsageCostUsd } from "./pricing.js";
 
 /* ---------------- 会话扫描（历史数据补齐） ---------------- */
 
@@ -15,14 +16,22 @@ interface UsageField {
   cost?: { total?: number };
 }
 
-function normalizeUsage(u: UsageField | undefined): Required<Pick<UsageRecord, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens" | "cost">> {
+function normalizeUsage(
+  u: UsageField | undefined,
+  provider: string,
+  model: string,
+): Required<Pick<UsageRecord, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens" | "cost">> {
+  const input = u?.input ?? 0;
+  const output = u?.output ?? 0;
+  const cacheRead = u?.cacheRead ?? 0;
+  const cacheWrite = u?.cacheWrite ?? 0;
   return {
-    input: u?.input ?? 0,
-    output: u?.output ?? 0,
-    cacheRead: u?.cacheRead ?? 0,
-    cacheWrite: u?.cacheWrite ?? 0,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
     totalTokens: u?.totalTokens ?? 0,
-    cost: u?.cost?.total ?? 0,
+    cost: estimateUsageCostUsd({ provider, model, input, output, cacheRead, cacheWrite }, u?.cost?.total ?? 0),
   };
 }
 
@@ -64,7 +73,7 @@ export function scanSessionFile(
       if (obj.type === "message" && obj.message) {
         const m = obj.message;
         if ((m.role === "assistant" || m.role === "toolResult") && m.usage) {
-          const u = normalizeUsage(m.usage);
+          const u = normalizeUsage(m.usage, m.provider ?? "", m.model ?? "");
           if (u.input === 0 && u.output === 0 && u.cacheRead === 0 && u.cacheWrite === 0 && u.cost === 0 && !u.totalTokens) {
             continue; // 无用量信息
           }
@@ -83,7 +92,7 @@ export function scanSessionFile(
           });
         }
       } else if (obj.type === "compaction" && obj.usage) {
-        const u = normalizeUsage(obj.usage);
+        const u = normalizeUsage(obj.usage, "", "(compaction)");
         out.push({
           key: `${sessionId}|compaction|${id}`,
           ts,
