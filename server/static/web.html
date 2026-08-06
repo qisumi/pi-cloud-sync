@@ -1037,7 +1037,7 @@ document.addEventListener('alpine:init', function () {
       loadedViews: { overview: false, sessions: false, devices: false, conflicts: false },
       // 内部（非响应式用途）
       token: localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || '',
-      chartInstance: null, autoTimer: null, _trendPending: null, _trendScheduled: false,
+      chartInstance: null, autoTimer: null, _trendDebounce: null,
       sessionRequestSeq: 0, statsRequestSeq: 0, requestControllers: Object.create(null),
       mediaDark: window.matchMedia('(prefers-color-scheme: dark)'),
 
@@ -1276,7 +1276,12 @@ document.addEventListener('alpine:init', function () {
       get recentSessions() { return (this._recent || []).filter(s => !s.deleted).slice(0, 7); },
 
       setDays(v) { this.days = v; this.refreshStats(); },
-      setMetric(v) { this.trendMetric = v; this.renderTrend(); },
+      setMetric(v) { this.trendMetric = v; this.scheduleTrendRender(); },
+      // 指标选择器防抖：快速连点合并为一次重建，限制交互频率
+      scheduleTrendRender() {
+        if (this._trendDebounce) clearTimeout(this._trendDebounce);
+        this._trendDebounce = setTimeout(() => { this._trendDebounce = null; this.renderTrend(); }, 140);
+      },
       setDevice(v) { this.device = v; this.refreshStats(); },
       setModel(v) { this.model = v; this.refreshStats(); },
       clearFilters() { this.device = ''; this.model = ''; this.refreshStats(); },
@@ -1290,19 +1295,17 @@ document.addEventListener('alpine:init', function () {
         const hourly = Number(this.days) === 1;
         const points = this.downsample(hourly ? (this.stats.byHour || []) : this.stats.byDay, 80);
         const metric = this.trendMetric;
-        // 无数据：取消待重建、销毁已有图表并显示空态
+        // 无数据：销毁已有图表并显示空态
         if (!points.length) {
-          this._trendPending = null;
-          if (this.chartInstance) { this.chartInstance.stop(); this.chartInstance.destroy(); this.chartInstance = null; }
+          if (this.chartInstance) { this.chartInstance.destroy(); this.chartInstance = null; }
           host.innerHTML = '<div class="empty"><span><span class="empty-glyph"><i data-lucide="activity" aria-hidden="true">⌁</i></span>当前范围内暂无用量数据</span></div>'; this._trendCaption = '没有可展示的数据'; this.refreshIcons(); return;
         }
         const values = points.map(r => metric === 'cost' ? r.cost || 0 : metric === 'requests' ? r.requests || 0 : r.total || 0);
         const total = values.reduce((s, v) => s + v, 0);
         this._trendCaption = '合计 ' + (metric === 'cost' ? this.fmtCost(total) : metric === 'requests' ? this.fmtFull(total) + ' 次请求' : this.fmtFull(total) + ' tokens');
-        // 图表库未加载：取消待重建、销毁已有图表并显示简化柱状 fallback
+        // 图表库未加载：显示简化柱状 fallback
         if (!window.Chart) {
-          this._trendPending = null;
-          if (this.chartInstance) { this.chartInstance.stop(); this.chartInstance.destroy(); this.chartInstance = null; }
+          if (this.chartInstance) { this.chartInstance.destroy(); this.chartInstance = null; }
           const max = Math.max.apply(Math, values.concat([1]));
           host.innerHTML = '<div class="chart-fallback">' + values.map((v, i) => '<div class="chart-fallback-bar" title="' + this.esc(points[i].date + ' · ' + v) + '" style="height:' + Math.max(2, v / max * 100).toFixed(1) + '%"></div>').join('') + '</div><div class="result-note">图表库未加载，已显示简化趋势。</div>'; return;
         }
@@ -1310,32 +1313,27 @@ document.addEventListener('alpine:init', function () {
         const color = metric === 'cost' ? styles.getPropertyValue('--amber').trim() : metric === 'requests' ? styles.getPropertyValue('--violet').trim() : styles.getPropertyValue('--brand').trim();
         const muted = styles.getPropertyValue('--muted').trim(), border = styles.getPropertyValue('--border').trim(), surface = styles.getPropertyValue('--surface-raised').trim();
         const labels = points.map(r => r.date.slice(5));
-        // 重建图表（不能复用实例调 chart.update()：Alpine 响应式环境下会触发 Chart.js
-        // 选项解析器无限递归，进而损坏图表状态报 'fullSize' 相关错误）。销毁/创建延迟到
-        // 下一帧执行：已排队的动画帧会先于本回调跑完（此时 ctx 仍有效），避免快速点击时
-        // 孤儿动画帧用已释放的 ctx 绘制导致崩溃/空白；连续调用以最后一次参数为准。
-        this._trendPending = { host, hourly, labels, values, color, muted, border, surface, metric, textColor: styles.getPropertyValue('--text').trim() };
-        if (this._trendScheduled) return;
-        this._trendScheduled = true;
-        requestAnimationFrame(() => {
-          this._trendScheduled = false;
-          const p = this._trendPending; this._trendPending = null;
-          if (!p || !p.host) return;
-          if (this.chartInstance) { this.chartInstance.stop(); this.chartInstance.destroy(); this.chartInstance = null; }
-          let canvas = p.host.querySelector('canvas');
-          if (!canvas) { p.host.innerHTML = '<canvas role="img" aria-label="' + (p.hourly ? '每小时' : '每日') + '用量趋势"></canvas>'; canvas = p.host.querySelector('canvas'); }
-          this.chartInstance = new window.Chart(canvas, {
-            type: 'bar',
-            data: { labels: p.labels, datasets: [{ data: p.values, backgroundColor: p.color + '99', borderColor: p.color, borderWidth: 1, borderRadius: 2, borderSkipped: 'bottom', maxBarThickness: 30 }] },
-            options: {
-              responsive: true, maintainAspectRatio: false, animation: { duration: 420 }, interaction: { intersect: false, mode: 'index' },
-              plugins: { legend: { display: false }, tooltip: { backgroundColor: p.surface, titleColor: p.textColor, bodyColor: p.muted, borderColor: p.border, borderWidth: 1, padding: 11, callbacks: { label: ctx => { const v = ctx.raw; return p.metric === 'cost' ? ' 费用 ' + this.fmtCost(v) : p.metric === 'requests' ? ' 请求 ' + this.fmtFull(v) : ' Tokens ' + this.fmtFull(v); } } } },
-              scales: {
-                x: { grid: { display: false }, ticks: { color: p.muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12, font: { size: 10 } }, border: { display: false } },
-                y: { beginAtZero: true, grid: { color: p.border, drawTicks: false }, border: { display: false }, ticks: { color: p.muted, padding: 8, font: { size: 10 }, callback: v => p.metric === 'cost' ? this.fmtCost(v) : this.fmtNum(v) } }
-              }
+        // 关键约定（两处都经无头浏览器复现验证）：
+        // 1. 不能复用实例调 chart.update()：Alpine 响应式环境下会触发 Chart.js 选项解析器
+        //    无限递归（Maximum call stack size exceeded），损坏图表状态后报
+        //    'Cannot set properties of undefined (setting fullSize)'。必须 destroy+recreate。
+        // 2. animation: false 关闭动画：Chart.js 不再产生动画帧，从根源上杜绝快速切换时
+        //    孤儿动画帧在 destroy（ctx 置 null）后仍绘制导致的崩溃/空白。
+        //    （此前 420ms 动画正是所有竞态的来源；指标切换由 setMetric 的 140ms 防抖限制频率。）
+        if (this.chartInstance) { this.chartInstance.destroy(); this.chartInstance = null; }
+        let canvas = host.querySelector('canvas');
+        if (!canvas) { host.innerHTML = '<canvas role="img" aria-label="' + (hourly ? '每小时' : '每日') + '用量趋势"></canvas>'; canvas = host.querySelector('canvas'); }
+        this.chartInstance = new window.Chart(canvas, {
+          type: 'bar',
+          data: { labels, datasets: [{ data: values, backgroundColor: color + '99', borderColor: color, borderWidth: 1, borderRadius: 2, borderSkipped: 'bottom', maxBarThickness: 30 }] },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: false, interaction: { intersect: false, mode: 'index' },
+            plugins: { legend: { display: false }, tooltip: { backgroundColor: surface, titleColor: styles.getPropertyValue('--text').trim(), bodyColor: muted, borderColor: border, borderWidth: 1, padding: 11, callbacks: { label: ctx => { const v = ctx.raw; return metric === 'cost' ? ' 费用 ' + this.fmtCost(v) : metric === 'requests' ? ' 请求 ' + this.fmtFull(v) : ' Tokens ' + this.fmtFull(v); } } } },
+            scales: {
+              x: { grid: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12, font: { size: 10 } }, border: { display: false } },
+              y: { beginAtZero: true, grid: { color: border, drawTicks: false }, border: { display: false }, ticks: { color: muted, padding: 8, font: { size: 10 }, callback: v => metric === 'cost' ? this.fmtCost(v) : this.fmtNum(v) } }
             }
-          });
+          }
         });
       },
 
