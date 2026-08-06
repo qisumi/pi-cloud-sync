@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseUsageHit } from "./usage.js";
+import { parseUsageHit, rolloutModelHint } from "./usage.js";
 import { usageCostUsd } from "./pricing.js";
 
 /** SQLite 数据库封装：schema 初始化 + 通用访问 */
@@ -290,10 +290,13 @@ export class SyncDb {
             input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      let usageHint: { model?: string; provider?: string } = {};
       for (const entry of entries) {
+        const hintUpdate = rolloutModelHint(entry.line);
+        if (hintUpdate) usageHint = { ...usageHint, ...hintUpdate };
         const meta = entryMeta(entry.line, entry.received_at);
         updateEntry.run(meta.role, meta.readable ? 1 : 0, meta.ts, entry.rowid, entry.session_uuid, entry.entry_id);
-        const hit = parseUsageHit(entry.line, entry.source_device, entry.session_uuid);
+        const hit = parseUsageHit(entry.line, entry.source_device, entry.session_uuid, usageHint);
         if (hit) {
           insertUsage.run(
             entry.session_uuid,
@@ -339,7 +342,7 @@ export class SyncDb {
     const rows = this.db
       .prepare(
         `SELECT rowid, session_uuid, provider, model, input_tokens, output_tokens, cache_read, cache_write
-         FROM session_usage WHERE cost = 0 AND (lower(model) LIKE '%5%2%' OR lower(model) LIKE '%mimo%')`,
+         FROM session_usage WHERE cost = 0 AND (lower(model) LIKE '%gpt-5.6%' OR lower(model) LIKE '%5%2%' OR lower(model) LIKE '%mimo%')`,
       )
       .all() as Array<{
       rowid: number;

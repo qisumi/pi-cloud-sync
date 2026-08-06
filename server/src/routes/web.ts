@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { SyncDb } from "../db.js";
-import { pruneSessions } from "../sessions.js";
+import { pruneSessions, reindexSessionUsage } from "../sessions.js";
 import { usageCostUsd } from "../pricing.js";
 
 interface EntryView {
@@ -260,6 +260,21 @@ export function registerWebRoutes(app: FastifyInstance, dbs: SyncDb) {
         return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "select 1-200 sessions" });
       }
       return { ok: true, data: pruneSessions(dbs, uuids, "web-console") };
+    },
+  );
+
+  app.post<{ Body: { uuids?: unknown } }>(
+    "/api/v1/web/sessions/reindex-usage",
+    async (req) => {
+      // 非破坏性维护操作：不要求 confirm。uuids 省略 = 重算全部未裁剪会话。
+      let uuids: string[] | undefined;
+      if (Array.isArray(req.body?.uuids)) {
+        uuids = (req.body.uuids as unknown[])
+          .filter((value): value is string => typeof value === "string")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0 && value.length <= 160);
+      }
+      return { ok: true, data: reindexSessionUsage(dbs, uuids) };
     },
   );
 }

@@ -5,11 +5,13 @@
  */
 export const USD_CNY_REFERENCE = 6.762932;
 
-/** 估算定价：CNY / 百万 tokens（来自各厂商公开的国内按量计费价） */
+/** 估算定价：每百万 tokens 价格（CNY=国内按量价，USD=官方美元价） */
 interface EstimatedModelPricing {
   /** 展示名，便于调试与日志 */
   name: string;
-  cnyPerMillion: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** 计价币种：CNY 按 USD_CNY_REFERENCE 折算为美元存储；USD 为官方美元价直接存储 */
+  currency: "CNY" | "USD";
+  perMillion: { input: number; output: number; cacheRead: number; cacheWrite: number };
   match: (provider: string, model: string) => boolean;
 }
 
@@ -36,6 +38,13 @@ const MIMO_V25_PRO_CNY_PER_MILLION = {
   cacheRead: 0.025,
   cacheWrite: 0,
 } as const;
+
+/** OpenAI GPT-5.6 系列（官方 API Standard 短上下文定价，美元/百万 tokens）
+ *  来源：developers.openai.com/api/docs/pricing（2026-07）。
+ *  cacheWrite = 1.25 × input（官方规则）；Codex rollout 暂不报告 cacheWrite，保留以备将来提取。 */
+const GPT_56_SOL_USD_PER_MILLION = { input: 5.0, output: 30.0, cacheRead: 0.5, cacheWrite: 6.25 } as const;
+const GPT_56_TERRA_USD_PER_MILLION = { input: 2.0, output: 12.0, cacheRead: 0.2, cacheWrite: 2.5 } as const;
+const GPT_56_LUNA_USD_PER_MILLION = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 } as const;
 
 export interface UsageForPricing {
   provider: string;
@@ -69,14 +78,32 @@ export function isMimoV25Usage(provider: string, model: string): boolean {
   return isMimo && m.includes("mimo") && m.includes("v2.5") && !m.includes("pro");
 }
 
+/** OpenAI GPT-5.6 Sol（前沿模型；gpt-5.6 别名路由到此）。按 model 精确匹配，忽略变体后缀。 */
+export function isGpt56SolUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?5[.-]?6[-_.]?sol$/i.test(model.trim());
+}
+
+/** OpenAI GPT-5.6 Terra */
+export function isGpt56TerraUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?5[.-]?6[-_.]?terra$/i.test(model.trim());
+}
+
+/** OpenAI GPT-5.6 Luna */
+export function isGpt56LunaUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?5[.-]?6[-_.]?luna$/i.test(model.trim());
+}
+
 /**
  * 已知「套餐上报 0 费用」的模型及其公开按量价。
  * 顺序敏感：Pro 变体必须排在标准 v2.5 之前（标准变体已排除 pro，此处双保险）。
  */
 const ESTIMATED_PRICING: EstimatedModelPricing[] = [
-  { name: "MiMo v2.5 Pro", cnyPerMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
-  { name: "MiMo v2.5", cnyPerMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
-  { name: "GLM-5.2", cnyPerMillion: GLM_52_CNY_PER_MILLION, match: isGlm52Usage },
+  { name: "MiMo v2.5 Pro", currency: "CNY", perMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
+  { name: "MiMo v2.5", currency: "CNY", perMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
+  { name: "GLM-5.2", currency: "CNY", perMillion: GLM_52_CNY_PER_MILLION, match: isGlm52Usage },
+  { name: "GPT-5.6 Sol", currency: "USD", perMillion: GPT_56_SOL_USD_PER_MILLION, match: isGpt56SolUsage },
+  { name: "GPT-5.6 Terra", currency: "USD", perMillion: GPT_56_TERRA_USD_PER_MILLION, match: isGpt56TerraUsage },
+  { name: "GPT-5.6 Luna", currency: "USD", perMillion: GPT_56_LUNA_USD_PER_MILLION, match: isGpt56LunaUsage },
 ];
 
 /**
@@ -87,13 +114,14 @@ export function usageCostUsd(usage: UsageForPricing, reportedCost: number): numb
   if (Number.isFinite(reportedCost) && reportedCost > 0) return reportedCost;
   for (const pricing of ESTIMATED_PRICING) {
     if (pricing.match(usage.provider, usage.model)) {
-      const cny =
-        (usage.input * pricing.cnyPerMillion.input +
-          usage.output * pricing.cnyPerMillion.output +
-          usage.cacheRead * pricing.cnyPerMillion.cacheRead +
-          usage.cacheWrite * pricing.cnyPerMillion.cacheWrite) /
+      const amount =
+        (usage.input * pricing.perMillion.input +
+          usage.output * pricing.perMillion.output +
+          usage.cacheRead * pricing.perMillion.cacheRead +
+          usage.cacheWrite * pricing.perMillion.cacheWrite) /
         1_000_000;
-      return cny / USD_CNY_REFERENCE;
+      // CNY 按量价需折算为美元；USD 官方价直接返回
+      return pricing.currency === "USD" ? amount : amount / USD_CNY_REFERENCE;
     }
   }
   return 0;
