@@ -4,6 +4,7 @@ import {
   estimateUsageCostUsd,
   isMimoV25Usage,
   isMimoV25ProUsage,
+  isGlm5Usage,
   isGlm52Usage,
   USD_CNY_REFERENCE,
 } from "../src/stats/pricing.js";
@@ -68,4 +69,27 @@ test("GLM-5.2 补算仍正常工作（回归保护）", () => {
   );
   assert.ok(Math.abs(glm * USD_CNY_REFERENCE - 46) < 1e-6);
   assert.ok(isGlm52Usage("zai-coding-cn", "glm-5.2-high"));
+});
+
+test("GLM-5.3 零费用按同 GLM-5.2 的按量价估算（8/28/缓存命中 2）", () => {
+  const glm53 = estimateUsageCostUsd(
+    { provider: "zai-coding-cn", model: "glm-5.3-high", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  // 8 + 28 + 2 + 8 = 46（与 GLM-5.2 同价）
+  assert.ok(Math.abs(glm53 * USD_CNY_REFERENCE - 46) < 1e-6);
+  // 仅输入：8 元
+  const inputOnly = estimateUsageCostUsd(
+    { provider: "zai", model: "glm-5.3", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+    0,
+  );
+  assert.ok(Math.abs(inputOnly * USD_CNY_REFERENCE - 8) < 1e-6);
+  // 识别函数：5.2 / 5.3 均命中；其他版本不误匹配
+  assert.ok(isGlm5Usage("zai-coding-cn", "glm-5.3"));
+  assert.ok(isGlm5Usage("zai", "glm-5.3-flash"));
+  assert.ok(isGlm5Usage("zai-coding-cn", "glm-5.2-high"));
+  assert.ok(!isGlm5Usage("zai", "glm-5"));
+  assert.ok(!isGlm5Usage("zai", "glm-5.1"));
+  assert.ok(!isGlm5Usage("zai", "glm-4.7"));
+  assert.ok(!isGlm5Usage("deepseek", "glm-5.3"));
 });

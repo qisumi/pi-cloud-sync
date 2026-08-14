@@ -25,6 +25,26 @@ test("GLM-5.2 zero-cost usage falls back to the published token pricing", () => 
   assert.equal(usageCostUsd({ provider: "test-provider", model: "glm-5.2", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
 });
 
+test("GLM-5.3 zero-cost usage estimated at the same published pricing as GLM-5.2", () => {
+  // GLM-5.3 上线 GLM Coding Plan 后同样上报 0 费用，按 5.2 同价（8/28/缓存命中 2）估算
+  const estimated = usageCostUsd(
+    {
+      provider: "zai-coding-cn",
+      model: "glm-5.3-high",
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheWrite: 1_000_000,
+    },
+    0,
+  );
+  assert.equal(Math.round(estimated * USD_CNY_REFERENCE), 46);
+  // 非零上报费用优先，不被 5.3 估算覆盖
+  assert.equal(usageCostUsd({ provider: "zai", model: "glm-5.3", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.25), 0.25);
+  // 其他 GLM-5.x（无公开同价）不误匹配
+  assert.equal(usageCostUsd({ provider: "zai", model: "glm-5.1", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
+});
+
 test("MiMo v2.5 / v2.5 Pro zero-cost usage falls back to published token pricing", () => {
   // 国内按量价（元/百万 tokens）：v2.5 in1/out2/cr0.02/cw0；pro in3/out6/cr0.025
   const v25 = usageCostUsd(

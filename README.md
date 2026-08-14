@@ -275,8 +275,8 @@ USD→CNY 汇率**运行时自动拉取 [Exchangerate-API](https://www.exchanger
 
 | provider | AI 命名专用模型 | 说明 |
 | --- | --- | --- |
-| `deepseek` | `deepseek-v4-flash` | 0.14/0.28 vs v4-pro 0.435/0.87 |
-| `zai-coding-cn` | `glm-4.7` | 套餐内相对最低（glm-5.2 8/28、5-turbo 5/22） |
+| `deepseek` | `deepseek-v4-flash` | 峰谷定价（2026-08-17 起）：峰值 3.0/9.0 元 vs v4-pro 9.0/27.0 元，空闲半价，flash 仍最便宜 |
+| `zai-coding-cn` | `glm-4.7` | 套餐内相对最低（glm-5.3/5.2 同价 8/28、5-turbo 5/22） |
 | `openai-codex` | `gpt-5.6-luna` | 0.2/1.2 vs gpt-5.4-mini 0.75/4.5、gpt-5.5 5/30 |
 
 可随时覆盖，例如：

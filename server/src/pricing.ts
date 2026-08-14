@@ -1,5 +1,5 @@
 /**
- * 服务器内部费用统一按 USD 保存。部分套餐渠道（GLM-5.2 Coding Plan、
+ * 服务器内部费用统一按 USD 保存。部分套餐渠道（GLM-5.2/5.3 Coding Plan、
  * Xiaomi MiMo Token Plan）将模型价格上报为 0，因此使用厂商公开的国内按量价
  * 做估算，再按控制台构建时汇率换算。
  */
@@ -15,8 +15,8 @@ interface EstimatedModelPricing {
   match: (provider: string, model: string) => boolean;
 }
 
-/** 智谱 GLM-5.2（开放平台按量价，元/百万 tokens） */
-const GLM_52_CNY_PER_MILLION = {
+/** 智谱 GLM-5.2 / 5.3（开放平台按量价一致，元/百万 tokens；GLM-5.3 沿用 5.2 定价 8/28/缓存命中 2） */
+const GLM_5X_CNY_PER_MILLION = {
   input: 8,
   output: 28,
   cacheRead: 2,
@@ -55,12 +55,16 @@ export interface UsageForPricing {
   cacheWrite: number;
 }
 
-export function isGlm52Usage(provider: string, model: string): boolean {
+/** GLM-5.2 / 5.3（同价，合并匹配） */
+export function isGlm5Usage(provider: string, model: string): boolean {
   const normalizedProvider = provider.trim().toLowerCase();
   const normalizedModel = model.trim().toLowerCase();
   const isZai = normalizedProvider.includes("zai") || normalizedProvider.includes("zhipu") || normalizedProvider.includes("bigmodel");
-  return isZai && /^glm[-_.]?5[.-]?2(?:$|[-_.])/.test(normalizedModel);
+  return isZai && /^glm[-_.]?5(?:[.-]?2|[.-]?3)(?:$|[-_.])/.test(normalizedModel);
 }
+
+/** @deprecated 兼容旧导出名，等价于 isGlm5Usage（GLM-5.2/5.3 同价）。 */
+export const isGlm52Usage = isGlm5Usage;
 
 /** MiMo v2.5 Pro（小米）：套餐接入时 cost 上报为 0。需先于 v2.5 匹配。 */
 export function isMimoV25ProUsage(provider: string, model: string): boolean {
@@ -100,14 +104,14 @@ export function isGpt56LunaUsage(_provider: string, model: string): boolean {
 const ESTIMATED_PRICING: EstimatedModelPricing[] = [
   { name: "MiMo v2.5 Pro", currency: "CNY", perMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
   { name: "MiMo v2.5", currency: "CNY", perMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
-  { name: "GLM-5.2", currency: "CNY", perMillion: GLM_52_CNY_PER_MILLION, match: isGlm52Usage },
+  { name: "GLM-5.2/5.3", currency: "CNY", perMillion: GLM_5X_CNY_PER_MILLION, match: isGlm5Usage },
   { name: "GPT-5.6 Sol", currency: "USD", perMillion: GPT_56_SOL_USD_PER_MILLION, match: isGpt56SolUsage },
   { name: "GPT-5.6 Terra", currency: "USD", perMillion: GPT_56_TERRA_USD_PER_MILLION, match: isGpt56TerraUsage },
   { name: "GPT-5.6 Luna", currency: "USD", perMillion: GPT_56_LUNA_USD_PER_MILLION, match: isGpt56LunaUsage },
 ];
 
 /**
- * 保留渠道上报的非零费用；仅为已知套餐模型（MiMo v2.5 系列 / GLM-5.2）的
+ * 保留渠道上报的非零费用；仅为已知套餐模型（MiMo v2.5 系列 / GLM-5.2/5.3）的
  * 零费用记录按公开按量价提供估算。
  */
 export function usageCostUsd(usage: UsageForPricing, reportedCost: number): number {

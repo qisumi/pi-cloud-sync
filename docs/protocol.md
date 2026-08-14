@@ -50,7 +50,7 @@ GET  /api/v1/admin/stats                # 对象/会话/冲突/设备数量
 > Web 控制台端点（`/api/v1/web/*`）与同步协议共用 Bearer Token 认证，供浏览器端调用，详见 `docs/architecture.md`。
 
 `/api/v1/web/stats?days=1` 除 `byDay` 外还返回 `byHour`（本地时区的 `YYYY-MM-DD HH:00` 分桶），
-供控制台绘制最近 24 小时趋势。Z.AI/智谱渠道上报为零费用的 GLM-5.2 系列记录按公开按量价估算；
+供控制台绘制最近 24 小时趋势。Z.AI/智谱渠道上报为零费用的 GLM-5.2/5.3 系列记录按公开按量价估算；
 渠道已经上报的非零费用始终优先。
 
 `/api/v1/web/sessions/:uuid` 除分页的 `entries` 与汇总 `usageSummary`（requests/totalTokens/cost/models）外，

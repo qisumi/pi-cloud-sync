@@ -1,7 +1,7 @@
 /**
  * 用量费用补算（客户端 /qisumi-usage 视图）。
  *
- * pi 按模型 cost 配置计算 usage.cost.total；部分套餐渠道（GLM-5.2 Coding
+ * pi 按模型 cost 配置计算 usage.cost.total；部分套餐渠道（GLM-5.2/5.3 Coding
  * Plan、Xiaomi MiMo Token Plan）把模型价格上报为 0，导致 pi 算出的费用恒为
  * 0。这里按厂商公开的国内按量价做估算，再按固定汇率换算成 USD，与
  * server/src/pricing.ts 保持一致——确保客户端与控制台金额口径统一。
@@ -16,8 +16,8 @@ interface EstimatedModelPricing {
   match: (provider: string, model: string) => boolean;
 }
 
-/** 智谱 GLM-5.2（开放平台按量价，元/百万 tokens） */
-const GLM_52_CNY_PER_MILLION = { input: 8, output: 28, cacheRead: 2, cacheWrite: 8 } as const;
+/** 智谱 GLM-5.2 / 5.3（开放平台按量价一致，元/百万 tokens；GLM-5.3 沿用 5.2 定价 8/28/缓存命中 2） */
+const GLM_5X_CNY_PER_MILLION = { input: 8, output: 28, cacheRead: 2, cacheWrite: 8 } as const;
 
 /** 小米 MiMo v2.5（国内按量价，元/百万 tokens；缓存写入限时免费） */
 const MIMO_V25_CNY_PER_MILLION = { input: 1, output: 2, cacheRead: 0.02, cacheWrite: 0 } as const;
@@ -34,12 +34,16 @@ export interface UsageForPricing {
   cacheWrite: number;
 }
 
-export function isGlm52Usage(provider: string, model: string): boolean {
+/** GLM-5.2 / 5.3（同价，合并匹配） */
+export function isGlm5Usage(provider: string, model: string): boolean {
   const normalizedProvider = provider.trim().toLowerCase();
   const normalizedModel = model.trim().toLowerCase();
   const isZai = normalizedProvider.includes("zai") || normalizedProvider.includes("zhipu") || normalizedProvider.includes("bigmodel");
-  return isZai && /^glm[-_.]?5[.-]?2(?:$|[-_.])/.test(normalizedModel);
+  return isZai && /^glm[-_.]?5(?:[.-]?2|[.-]?3)(?:$|[-_.])/.test(normalizedModel);
 }
+
+/** @deprecated 兼容旧导出名，等价于 isGlm5Usage（GLM-5.2/5.3 同价）。 */
+export const isGlm52Usage = isGlm5Usage;
 
 /** MiMo v2.5 Pro（小米）：套餐接入时 cost 上报为 0。需先于 v2.5 匹配。 */
 export function isMimoV25ProUsage(provider: string, model: string): boolean {
@@ -61,11 +65,11 @@ export function isMimoV25Usage(provider: string, model: string): boolean {
 const ESTIMATED_PRICING: EstimatedModelPricing[] = [
   { name: "MiMo v2.5 Pro", cnyPerMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
   { name: "MiMo v2.5", cnyPerMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
-  { name: "GLM-5.2", cnyPerMillion: GLM_52_CNY_PER_MILLION, match: isGlm52Usage },
+  { name: "GLM-5.2/5.3", cnyPerMillion: GLM_5X_CNY_PER_MILLION, match: isGlm5Usage },
 ];
 
 /**
- * 渠道上报费用非零则保留；否则按已知套餐模型（MiMo v2.5 系列 / GLM-5.2）的
+ * 渠道上报费用非零则保留；否则按已知套餐模型（MiMo v2.5 系列 / GLM-5.2/5.3）的
  * 公开按量价估算，返回 USD。
  */
 export function estimateUsageCostUsd(usage: UsageForPricing, reportedCost: number): number {
