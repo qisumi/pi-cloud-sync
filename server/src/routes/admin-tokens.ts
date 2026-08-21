@@ -3,6 +3,6 @@ import type { TokenRecord } from "../auth.js";
 
 export function listTokens(dbs: SyncDb): TokenRecord[] {
   return dbs.db
-    .prepare(`SELECT id, name, token_hash, created_at FROM tokens`)
+    .prepare(`SELECT id, name, token_hash AS tokenHash, created_at FROM tokens`)
     .all() as unknown as TokenRecord[];
 }

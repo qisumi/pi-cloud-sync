@@ -588,11 +588,12 @@ test("admin token management", async (t) => {
   const createdJson = (await created.json()) as { data: { token: string } };
   assert.ok(createdJson.data.token.length > 20);
 
-  // 新令牌可用
-  const ok = await fetch(`${ctx.base}/api/v1/health`, {
+  // 新令牌可用（用受保护端点验证——/api/v1/health 免鉴权，测不出 verifyToken 的字段映射 bug）
+  const ok = await fetch(`${ctx.base}/api/v1/devices`, {
     headers: { authorization: `Bearer ${createdJson.data.token}` },
   });
   assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).data.length, 1); // 设备列表只有 dev-a
 
 });
 

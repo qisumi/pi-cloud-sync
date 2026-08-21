@@ -27,7 +27,7 @@ export async function startServer(cfg = loadConfig()) {
   const tokenProvider = (): TokenRecord[] => {
     if (!tokenCache) {
       tokenCache = dbs.db
-        .prepare(`SELECT id, name, token_hash, created_at FROM tokens`)
+        .prepare(`SELECT id, name, token_hash AS tokenHash, created_at FROM tokens`)
         .all() as unknown as TokenRecord[];
     }
     return tokenCache;
