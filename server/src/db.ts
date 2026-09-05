@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseUsageHit } from "./usage.js";
-import { usageCostUsd } from "./pricing.js";
+import { usageCostUsd, deepseekCostUsd, DEEPSEEK_PEAK_PRICING_SINCE_MS } from "./pricing.js";
 
 /** SQLite 数据库封装：schema 初始化 + 通用访问 */
 export class SyncDb {
@@ -334,40 +334,44 @@ export class SyncDb {
     tx();
   }
 
-  /** 为历史 GLM-5.2 / MiMo v2.5 系列零费用记录补上按量估算，并同步会话汇总。 */
+  /** 为历史零费用记录（GLM-5.x / MiMo / GPT-5.6 / GPT-6）补上按量估算；
+   *  并为 DeepSeek V4 峰谷计价（2026-08-17 起）重算 pi 静态平价留下的过期费用。 */
   private backfillEstimatedCosts() {
     const rows = this.db
       .prepare(
-        `SELECT rowid, session_uuid, provider, model, input_tokens, output_tokens, cache_read, cache_write
-         FROM session_usage WHERE cost = 0 AND (lower(model) LIKE '%5%2%' OR lower(model) LIKE '%mimo%')`,
+        `SELECT rowid, session_uuid, provider, model, occurred_at, cost, input_tokens, output_tokens, cache_read, cache_write
+         FROM session_usage
+         WHERE (cost = 0 AND (lower(model) LIKE '%glm%' OR lower(model) LIKE '%mimo%' OR lower(model) LIKE '%gpt-5.6%' OR lower(model) LIKE '%gpt-6%'))
+            OR (occurred_at >= ? AND (lower(model) LIKE '%deepseek%' OR lower(provider) LIKE '%deepseek%'))`,
       )
-      .all() as Array<{
+      .all(DEEPSEEK_PEAK_PRICING_SINCE_MS) as Array<{
       rowid: number;
       session_uuid: string;
       provider: string;
       model: string;
+      occurred_at: number;
+      cost: number;
       input_tokens: number;
       output_tokens: number;
       cache_read: number;
       cache_write: number;
     }>;
     if (rows.length === 0) return;
-    const update = this.db.prepare(`UPDATE session_usage SET cost = ? WHERE rowid = ? AND cost = 0`);
+    const update = this.db.prepare(`UPDATE session_usage SET cost = ? WHERE rowid = ?`);
     const touched = new Set<string>();
     const tx = this.db.transaction(() => {
       for (const row of rows) {
-        const cost = usageCostUsd(
-          {
-            provider: row.provider,
-            model: row.model,
-            input: row.input_tokens,
-            output: row.output_tokens,
-            cacheRead: row.cache_read,
-            cacheWrite: row.cache_write,
-          },
-          0,
-        );
-        if (cost <= 0) continue;
+        const usage = {
+          provider: row.provider,
+          model: row.model,
+          input: row.input_tokens,
+          output: row.output_tokens,
+          cacheRead: row.cache_read,
+          cacheWrite: row.cache_write,
+        };
+        // DeepSeek V4 峰谷价优先（覆盖过期非零平价）；其余仅补零费用
+        const cost = deepseekCostUsd(usage, row.occurred_at) ?? usageCostUsd(usage, 0, row.occurred_at);
+        if (cost <= 0 || Math.abs(cost - row.cost) < 1e-12) continue;
         update.run(cost, row.rowid);
         touched.add(row.session_uuid);
       }

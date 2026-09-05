@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { sessionsDir } from "../sync/sessions.js";
 import { agentDir } from "../config.js";
 import type { UsageRecord, UsageInput } from "./collector.js";
-import { estimateUsageCostUsd } from "./pricing.js";
+import { estimateUsageCostUsd, deepseekCostUsd } from "./pricing.js";
 
 /* ---------------- 会话扫描（历史数据补齐） ---------------- */
 
@@ -20,6 +20,7 @@ function normalizeUsage(
   u: UsageField | undefined,
   provider: string,
   model: string,
+  ts: number,
 ): Required<Pick<UsageRecord, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens" | "cost">> {
   const input = u?.input ?? 0;
   const output = u?.output ?? 0;
@@ -31,7 +32,7 @@ function normalizeUsage(
     cacheRead,
     cacheWrite,
     totalTokens: u?.totalTokens ?? 0,
-    cost: estimateUsageCostUsd({ provider, model, input, output, cacheRead, cacheWrite }, u?.cost?.total ?? 0),
+    cost: estimateUsageCostUsd({ provider, model, input, output, cacheRead, cacheWrite }, u?.cost?.total ?? 0, ts),
   };
 }
 
@@ -73,7 +74,7 @@ export function scanSessionFile(
       if (obj.type === "message" && obj.message) {
         const m = obj.message;
         if ((m.role === "assistant" || m.role === "toolResult") && m.usage) {
-          const u = normalizeUsage(m.usage, m.provider ?? "", m.model ?? "");
+          const u = normalizeUsage(m.usage, m.provider ?? "", m.model ?? "", ts);
           if (u.input === 0 && u.output === 0 && u.cacheRead === 0 && u.cacheWrite === 0 && u.cost === 0 && !u.totalTokens) {
             continue; // 无用量信息
           }
@@ -92,7 +93,7 @@ export function scanSessionFile(
           });
         }
       } else if (obj.type === "compaction" && obj.usage) {
-        const u = normalizeUsage(obj.usage, "", "(compaction)");
+        const u = normalizeUsage(obj.usage, "", "(compaction)", ts);
         out.push({
           key: `${sessionId}|compaction|${id}`,
           ts,
@@ -303,12 +304,20 @@ export function buildReport(
     if (r.ts > (summary.lastTs ?? 0)) summary.lastTs = r.ts;
     if (summary.firstTs === null || r.ts < summary.firstTs) summary.firstTs = r.ts;
 
+    // DeepSeek V4 峰谷重算：历史记录/pi 静态平价可能过期，报表层自愈
+    //（不改落盘数据，与 server 端 DB 回填口径一致）
+    const cost =
+      deepseekCostUsd(
+        { provider: r.provider, model: r.model, input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite },
+        r.ts,
+      ) ?? r.cost;
+
     summary.totalInput += r.input;
     summary.totalOutput += r.output;
     summary.totalCacheRead += r.cacheRead;
     summary.totalCacheWrite += r.cacheWrite;
     summary.totalTokens += r.totalTokens || r.input + r.output + r.cacheRead + r.cacheWrite;
-    summary.totalCost += r.cost;
+    summary.totalCost += cost;
     summary.requests += r.requests;
     if (r.sessionName) sessionNames.set(r.sessionId, r.sessionName);
 
@@ -319,7 +328,7 @@ export function buildReport(
       row.cacheRead += r.cacheRead;
       row.cacheWrite += r.cacheWrite;
       row.total += r.totalTokens || r.input + r.output + r.cacheRead + r.cacheWrite;
-      row.cost += r.cost;
+      row.cost += cost;
       row.requests += r.requests;
       m.set(key, row);
     };

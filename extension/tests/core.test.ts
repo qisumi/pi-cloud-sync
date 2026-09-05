@@ -14,9 +14,10 @@ import {
   scanSessionIncrements,
   commitSessionCheckpoint,
 } from "../src/sync/sessions.js";
-import { UsageCollector } from "../src/stats/collector.js";
+import { UsageCollector, type UsageRecord } from "../src/stats/collector.js";
 import { scanSessionFile, mergeRecords, buildReport } from "../src/stats/analyzer.js";
 import { formatReport } from "../src/stats/report.js";
+import { USD_CNY_REFERENCE } from "../src/stats/pricing.js";
 import { fetchUsdCnyRate, clearRateCache } from "../src/stats/rates.js";
 import { generateAiSessionName, summarizeName } from "../src/session.js";
 import type { MergedObject, SessionSnapshot } from "../src/types.js";
@@ -207,6 +208,39 @@ test("stats: collector dedupe + analyzer aggregation", () => {
   assert.ok(!usd.includes("¥"));
 });
 
+test("stats: buildReport 对历史 DeepSeek 过期平价自愈重算（峰谷）", () => {
+  // 落盘记录携带过期平价 cost=0.001（pi 静态配置算出）；实际处于高峰时段
+  const peakTs = Date.UTC(2026, 8, 1, 2, 0, 0); // 北京周二 10:00 高峰
+  const stale: UsageRecord[] = [
+    {
+      key: "k1",
+      ts: peakTs,
+      sessionId: "s1",
+      sessionName: null,
+      project: "",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      input: 1_000_000,
+      output: 1_000_000,
+      cacheRead: 1_000_000,
+      cacheWrite: 0,
+      totalTokens: 3_000_000,
+      cost: 0.001,
+      requests: 1,
+      device: "",
+      source: "scan",
+    },
+  ];
+  const report = buildReport(stale, {});
+  // 高峰价 3+9+0.1 = 12.1 元 → USD（而非沿用 0.001）
+  assert.ok(Math.abs(report.summary.totalCost * USD_CNY_REFERENCE - 12.1) < 1e-6);
+  assert.ok(Math.abs(report.byModel[0].cost * USD_CNY_REFERENCE - 12.1) < 1e-6);
+
+  // 峰谷生效前的历史记录不重算，沿用落盘值
+  const pre: UsageRecord[] = [{ ...stale[0], ts: Date.UTC(2026, 7, 10, 2, 0, 0), cost: 0.001 }];
+  assert.ok(Math.abs(buildReport(pre, {}).summary.totalCost - 0.001) < 1e-12);
+});
+
 test("stats: usd-cny rate from exchangerate-api (mock), cache, failure fallback", async () => {
   clearRateCache();
   // 正常响应：解析 rates.CNY
@@ -256,7 +290,7 @@ test("session: config defaults include independent AI auto-name model mapping", 
   assert.equal(c.session.autoName, true);
   assert.equal(c.session.autoNameMax, 32);
   assert.equal(c.session.autoNameModelByProvider["deepseek"], "deepseek-v4-flash");
-  assert.equal(c.session.autoNameModelByProvider["zai-coding-cn"], "glm-4.7");
+  assert.equal(c.session.autoNameModelByProvider["zai-coding-cn"], "glm-5.3-flash");
   assert.equal(c.session.autoNameModelByProvider["openai-codex"], "gpt-5.6-luna");
   // saveConfig 往返保留 session
   saveConfig(c);

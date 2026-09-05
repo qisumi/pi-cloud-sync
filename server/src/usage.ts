@@ -50,7 +50,7 @@ export function parseUsageHit(line: string, sourceDevice: string, sessionUuid: s
     const total = Number(usage.totalTokens ?? 0) || input + output + cacheRead + cacheWrite;
     const costObject = (usage.cost ?? {}) as Record<string, unknown>;
     const reportedCost = Number(costObject.total ?? 0) || 0;
-    const cost = usageCostUsd({ provider, model, input, output, cacheRead, cacheWrite }, reportedCost);
+    const cost = usageCostUsd({ provider, model, input, output, cacheRead, cacheWrite }, reportedCost, ts);
     if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && total === 0 && cost === 0) return null;
 
     return {

@@ -64,7 +64,11 @@ function parseReadableEntry(line: string): EntryView | null {
         input,
         output,
         totalTokens: Number(usage.totalTokens ?? 0) || 0,
-        cost: usageCostUsd({ provider: entry.provider ?? "", model: entry.model ?? "", input, output, cacheRead, cacheWrite }, Number(cost.total ?? 0) || 0),
+        cost: usageCostUsd(
+          { provider: entry.provider ?? "", model: entry.model ?? "", input, output, cacheRead, cacheWrite },
+          Number(cost.total ?? 0) || 0,
+          ts ?? Date.now(),
+        ),
       };
     }
     return entry;

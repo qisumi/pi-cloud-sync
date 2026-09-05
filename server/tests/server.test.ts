@@ -64,13 +64,13 @@ test("MiMo v2.5 / v2.5 Pro zero-cost usage falls back to published token pricing
 });
 
 test("GPT-5.6 Sol/Terra/Luna zero-cost usage estimated at official USD pricing", () => {
-  // 官方 API Standard 短上下文价（美元/百万 tokens）：sol 5/30/0.5，terra 2/12/0.2，luna 0.2/1.2/0.02
+  // 官方 API Standard 短上下文价（美元/百万 tokens）：sol 促销降价后 4/20/0.4，terra 2/12/0.2，luna 0.2/1.2/0.02
   // USD 官方价直接返回，不经过 USD_CNY_REFERENCE 折算
   const sol = usageCostUsd(
     { provider: "openai", model: "gpt-5.6-sol", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
     0,
   );
-  assert.ok(Math.abs(sol - 35.5) < 1e-9); // 5 + 30 + 0.5
+  assert.ok(Math.abs(sol - 24.4) < 1e-9); // 4 + 20 + 0.4
 
   const terra = usageCostUsd(
     { provider: "openai", model: "gpt-5.6-terra", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
@@ -90,6 +90,90 @@ test("GPT-5.6 Sol/Terra/Luna zero-cost usage estimated at official USD pricing",
   assert.equal(usageCostUsd({ provider: "openai", model: "gpt-5.6", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0), 0);
   // 按 model 匹配，provider 不同也认
   assert.ok(usageCostUsd({ provider: "codex", model: "gpt-5.6-luna", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0) > 0);
+});
+
+test("GPT-6 Astra zero-cost usage estimated at official USD pricing", () => {
+  // 官方 Standard 短上下文价（美元/百万 tokens）：10/50/1/12.5（长上下文 20/75 未计）
+  const astra = usageCostUsd(
+    { provider: "openai", model: "gpt-6-astra", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(astra - 73.5) < 1e-9); // 10 + 50 + 1 + 12.5
+  // 无后缀别名 gpt-6 同样路由到 Astra
+  const alias = usageCostUsd(
+    { provider: "openai", model: "gpt-6", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+    0,
+  );
+  assert.ok(Math.abs(alias - 10) < 1e-9);
+  // 渠道上报非零费用优先
+  assert.equal(usageCostUsd({ provider: "codex", model: "gpt-6-astra", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.5), 0.5);
+});
+
+test("GLM-5.3-Flash zero-cost usage estimated at its own 1/10 pricing, not GLM-5.3's", () => {
+  // 列表价（元/百万 tokens）：0.8/2.8/缓存命中 0.23；缓存存储限时免费 → cacheWrite 0
+  const flash = usageCostUsd(
+    { provider: "zai-coding-cn", model: "glm-5.3-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(flash * USD_CNY_REFERENCE - 3.83) < 1e-6); // 0.8 + 2.8 + 0.23 + 0
+  // 非零上报费用优先
+  assert.equal(usageCostUsd({ provider: "zai", model: "glm-5.3-flash", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.01), 0.01);
+});
+
+test("DeepSeek V4 peak/off-peak pricing recomputed by timestamp, overriding stale flat cost", () => {
+  // 峰谷价（元/百万 tokens）：flash 高峰 3/9/0.1，pro 高峰 9/27/0.3，空闲半价
+  // 北京时间 2026-09-01（周二）10:00 = UTC 02:00 → 高峰
+  const peakTs = Date.UTC(2026, 8, 1, 2, 0, 0);
+  // 北京时间 2026-09-01（周二）21:00 = UTC 13:00 → 空闲（半价）
+  const offPeakTs = Date.UTC(2026, 8, 1, 13, 0, 0);
+  // 北京时间 2026-09-05（周六）10:00 = UTC 02:00 → 周末空闲
+  const weekendTs = Date.UTC(2026, 8, 5, 2, 0, 0);
+
+  const flashPeak = usageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
+    0.0006,
+    peakTs,
+  );
+  assert.ok(Math.abs(flashPeak * USD_CNY_REFERENCE - 12.1) < 1e-6); // 3 + 9 + 0.1
+  // 过期平价上报被峰谷重算覆盖（不再是 0.0006）
+  assert.ok(Math.abs(flashPeak - 0.0006) > 1e-3);
+
+  const flashOff = usageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
+    0,
+    offPeakTs,
+  );
+  assert.ok(Math.abs(flashOff * USD_CNY_REFERENCE - 6.05) < 1e-6); // 空闲半价
+
+  const weekend = usageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-flash-vision-exp", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+    0,
+    weekendTs,
+  );
+  assert.ok(Math.abs(weekend * USD_CNY_REFERENCE - 1.5) < 1e-6); // vision-exp 与 flash 同价
+
+  const proPeak = usageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-pro", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
+    0,
+    peakTs,
+  );
+  assert.ok(Math.abs(proPeak * USD_CNY_REFERENCE - 36.3) < 1e-6); // 9 + 27 + 0.3
+
+  // 峰谷生效（北京时间 2026-08-17）之前的记录沿用旧平价：保留上报值
+  const preTs = Date.UTC(2026, 7, 10, 2, 0, 0);
+  assert.equal(
+    usageCostUsd({ provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0.14, preTs),
+    0.14,
+  );
+  assert.equal(
+    usageCostUsd({ provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0, preTs),
+    0,
+  );
+  // 旧模型（deepseek-chat 等）不套峰谷价
+  assert.equal(
+    usageCostUsd({ provider: "deepseek", model: "deepseek-chat", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0.2, peakTs),
+    0.2,
+  );
 });
 
 interface TestCtx {

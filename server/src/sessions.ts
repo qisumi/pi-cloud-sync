@@ -497,7 +497,7 @@ export function mergeUsageEvents(
       event.cacheRead,
       event.cacheWrite,
       event.totalTokens,
-      usageCostUsd(event, event.cost),
+      usageCostUsd(event, event.cost, event.occurredAt),
     );
     if (result.changes > 0) {
       accepted++;

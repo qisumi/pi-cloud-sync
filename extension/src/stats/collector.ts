@@ -92,9 +92,10 @@ export class UsageCollector {
     this.seen.add(key);
 
     const usage = input.usage ?? {};
+    const ts = input.ts ?? Date.now();
     const rec: UsageRecord = {
       key,
-      ts: input.ts ?? Date.now(),
+      ts,
       sessionId: input.sessionId,
       sessionName: input.sessionName ?? null,
       project: input.project ?? "",
@@ -115,6 +116,7 @@ export class UsageCollector {
           cacheWrite: usage.cacheWrite ?? 0,
         },
         usage.cost?.total ?? 0,
+        ts,
       ),
       requests: 1,
       device: input.device ?? "",

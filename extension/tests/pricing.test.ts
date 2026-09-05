@@ -6,6 +6,9 @@ import {
   isMimoV25ProUsage,
   isGlm5Usage,
   isGlm52Usage,
+  isGlm53FlashUsage,
+  isDeepseekV4Usage,
+  isDeepseekPeakHour,
   USD_CNY_REFERENCE,
 } from "../src/stats/pricing.js";
 
@@ -86,10 +89,117 @@ test("GLM-5.3 零费用按同 GLM-5.2 的按量价估算（8/28/缓存命中 2�
   assert.ok(Math.abs(inputOnly * USD_CNY_REFERENCE - 8) < 1e-6);
   // 识别函数：5.2 / 5.3 均命中；其他版本不误匹配
   assert.ok(isGlm5Usage("zai-coding-cn", "glm-5.3"));
-  assert.ok(isGlm5Usage("zai", "glm-5.3-flash"));
+  assert.ok(isGlm5Usage("zai", "glm-5.3-flash") === false); // flash 独立定价，不套 5.2/5.3 价
   assert.ok(isGlm5Usage("zai-coding-cn", "glm-5.2-high"));
   assert.ok(!isGlm5Usage("zai", "glm-5"));
   assert.ok(!isGlm5Usage("zai", "glm-5.1"));
   assert.ok(!isGlm5Usage("zai", "glm-4.7"));
   assert.ok(!isGlm5Usage("deepseek", "glm-5.3"));
+});
+
+test("GLM-5.3-Flash 按独立 1/10 定价估算（0.8/2.8/缓存命中 0.23），非 5.2/5.3 的 8/28", () => {
+  const flash = estimateUsageCostUsd(
+    { provider: "zai-coding-cn", model: "glm-5.3-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  // 0.8 + 2.8 + 0.23 + 0（缓存存储限时免费） = 3.83
+  assert.ok(Math.abs(flash * USD_CNY_REFERENCE - 3.83) < 1e-6);
+  // 仅输入：0.8 元
+  const inputOnly = estimateUsageCostUsd(
+    { provider: "zai", model: "glm-5.3-flash", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+    0,
+  );
+  assert.ok(Math.abs(inputOnly * USD_CNY_REFERENCE - 0.8) < 1e-6);
+  // 识别：zai 渠道 + glm-5.3-flash（含变体后缀）；非 zai 渠道不识别
+  assert.ok(isGlm53FlashUsage("zai-coding-cn", "glm-5.3-flash"));
+  assert.ok(isGlm53FlashUsage("zai", "glm-5.3-flash-highspeed"));
+  assert.ok(!isGlm53FlashUsage("deepseek", "glm-5.3-flash"));
+  assert.ok(!isGlm53FlashUsage("zai", "glm-5.3"));
+  // 非零上报费用优先
+  assert.equal(
+    estimateUsageCostUsd({ provider: "zai", model: "glm-5.3-flash", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.01),
+    0.01,
+  );
+});
+
+test("DeepSeek V4 峰谷计价：按时间戳重算，覆盖过期的静态平价", () => {
+  // 峰谷价（元/百万 tokens）：flash 高峰 3/9/0.1（空闲半价），pro 高峰 9/27/0.3
+  // 北京 2026-09-01 周二 10:00 = UTC 02:00 → 高峰
+  const peakTs = Date.UTC(2026, 8, 1, 2, 0, 0);
+  // 北京 2026-09-01 周二 21:00 = UTC 13:00 → 空闲半价
+  const offPeakTs = Date.UTC(2026, 8, 1, 13, 0, 0);
+
+  const flashPeak = estimateUsageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
+    0.0006,
+    peakTs,
+  );
+  assert.ok(Math.abs(flashPeak * USD_CNY_REFERENCE - 12.1) < 1e-6); // 3 + 9 + 0.1
+  // 上报的过期平价（0.0006）被覆盖，高峰约 5 倍
+  assert.ok(flashPeak > 0.003);
+
+  const flashOff = estimateUsageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
+    0,
+    offPeakTs,
+  );
+  assert.ok(Math.abs(flashOff * USD_CNY_REFERENCE - 6.05) < 1e-6);
+
+  const proPeak = estimateUsageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-pro", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 0 },
+    0,
+    peakTs,
+  );
+  assert.ok(Math.abs(proPeak * USD_CNY_REFERENCE - 36.3) < 1e-6); // 9 + 27 + 0.3
+
+  // vision-exp 与 flash 同价（周末空闲半价）
+  const weekendTs = Date.UTC(2026, 8, 5, 2, 0, 0); // 北京周六 10:00
+  const vision = estimateUsageCostUsd(
+    { provider: "deepseek", model: "deepseek-v4-flash-vision-exp", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+    0,
+    weekendTs,
+  );
+  assert.ok(Math.abs(vision * USD_CNY_REFERENCE - 1.5) < 1e-6);
+
+  // 峰谷生效前（北京 2026-08-17 之前）沿用旧平价：保留上报值 / 零则零
+  const preTs = Date.UTC(2026, 7, 10, 2, 0, 0);
+  assert.equal(
+    estimateUsageCostUsd({ provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0.14, preTs),
+    0.14,
+  );
+  assert.equal(
+    estimateUsageCostUsd({ provider: "deepseek", model: "deepseek-v4-flash", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0, preTs),
+    0,
+  );
+  // 旧模型不套峰谷价（沿用上报值）
+  assert.equal(
+    estimateUsageCostUsd({ provider: "deepseek", model: "deepseek-chat", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0.2, peakTs),
+    0.2,
+  );
+});
+
+test("DeepSeek 高峰时段判定：北京时间工作日 9-12 / 14-18", () => {
+  // 边界：9:00 含、12:00 不含、14:00 含、18:00 不含（均取周二）
+  const tue = (bjHour: number, bjMin = 0) => Date.UTC(2026, 8, 1, bjHour - 8, bjMin, 0);
+  assert.ok(isDeepseekPeakHour(tue(9)));
+  assert.ok(isDeepseekPeakHour(tue(11, 59)));
+  assert.ok(!isDeepseekPeakHour(tue(12)));
+  assert.ok(!isDeepseekPeakHour(tue(13, 59)));
+  assert.ok(isDeepseekPeakHour(tue(14)));
+  assert.ok(isDeepseekPeakHour(tue(17, 59)));
+  assert.ok(!isDeepseekPeakHour(tue(18)));
+  assert.ok(!isDeepseekPeakHour(tue(8, 59)));
+  // 周末全天空闲
+  const sat = Date.UTC(2026, 8, 5, 2, 0, 0); // 北京周六 10:00
+  const sun = Date.UTC(2026, 8, 6, 6, 0, 0); // 北京周日 14:00
+  assert.ok(!isDeepseekPeakHour(sat));
+  assert.ok(!isDeepseekPeakHour(sun));
+  // 识别函数：v4 系列命中；旧模型 / 非 deepseek 渠道不命中
+  assert.ok(isDeepseekV4Usage("deepseek", "deepseek-v4-flash"));
+  assert.ok(isDeepseekV4Usage("deepseek", "deepseek-v4-pro"));
+  assert.ok(isDeepseekV4Usage("deepseek", "deepseek-v4-flash-vision-exp"));
+  assert.ok(!isDeepseekV4Usage("deepseek", "deepseek-chat"));
+  assert.ok(!isDeepseekV4Usage("deepseek", "deepseek-reasoner"));
+  assert.ok(!isDeepseekV4Usage("zai", "deepseek-v4-flash"));
+  assert.ok(!isDeepseekV4Usage("openai", "gpt-6-astra"));
 });
