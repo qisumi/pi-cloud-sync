@@ -175,8 +175,8 @@ export function registerDeviceRoutes(app: FastifyInstance, dbs: SyncDb) {
   app.delete<{ Params: { id: string }; Body: { confirmName?: unknown } }>("/api/v1/devices/:id", async (req, reply) => {
     const row = dbs.db.prepare(`SELECT * FROM devices WHERE device_id = ?`).get(req.params.id) as DeviceRow | undefined;
     if (!row) return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "device not found" });
-    if (row.status === "merged") {
-      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "merged device is already hidden from lists" });
+    if (row.status === "retired") {
+      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "device already retired" });
     }
     const confirmName = typeof req.body?.confirmName === "string" ? req.body.confirmName : "";
     if (confirmName !== row.name) {

@@ -33,6 +33,7 @@
 - 设备置为 `retired` 并记录 `retired_at`，从「当前设备」列表与统计筛选中隐藏；
 - `/api/v1/web/stats` 的设备分布把退役设备（含无主用量行）归并为虚拟桶 `__other__`（显示名「其他设备」），可用 `deviceId=__other__` 筛选；
 - 已退役设备再次心跳不会复活（不占用合并语义的 reactivated），需要时在 Web 控制台「已删除」筛选中 `POST /api/v1/devices/:id/restore` 恢复；
+- 已合并（merged）设备也可退役：其历史已迁移到目标设备，退役仅清理设备列表展示；
 - 与 merge 的区别：merge 把历史永久改写到目标设备；retire 保留原归属，仅展示层归并，可随时恢复。
 
 ## 端到端示例

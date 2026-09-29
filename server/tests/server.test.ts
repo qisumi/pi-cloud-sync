@@ -1658,4 +1658,27 @@ test("device retire: stats folded into 其他设备, heartbeat stays retired, re
   const restored = devicesFinalJson.data.find((d) => d.deviceId === oldDeviceId)!;
   assert.equal(restored.status, "active");
   assert.equal(restored.retiredAt, null);
+
+  // 已合并（merged）设备也可退役：仅清理列表展示
+  const hbTemp = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
+    body: JSON.stringify({ deviceId: "", name: "temp-dev", platform: "linux", piVersion: "0.83.0", extensionVersion: "0.2.0" }),
+  });
+  const tempId = ((await hbTemp.json()) as { data: { deviceId: string } }).data.deviceId;
+  const mergeTemp = await fetch(`${ctx.base}/api/v1/devices/merge`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({ sourceDeviceIds: [tempId], targetDeviceId: ctx.deviceId, confirmTargetName: "dev-a" }),
+  });
+  assert.equal(mergeTemp.status, 200);
+  const retireMerged = await fetch(`${ctx.base}/api/v1/devices/${tempId}`, {
+    method: "DELETE",
+    headers: headers(ctx),
+    body: JSON.stringify({ confirmName: "temp-dev" }),
+  });
+  assert.equal(retireMerged.status, 200);
+  const devicesAfterMerged = await fetch(`${ctx.base}/api/v1/devices`, { headers: headers(ctx) });
+  const afterMergedJson = (await devicesAfterMerged.json()) as { data: Array<{ deviceId: string; status: string }> };
+  assert.equal(afterMergedJson.data.find((d) => d.deviceId === tempId)!.status, "retired");
 });

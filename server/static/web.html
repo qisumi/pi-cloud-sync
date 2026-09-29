@@ -894,7 +894,7 @@
               <div class="device-id-row"><span class="device-id" :title="device.deviceId" x-text="device.deviceId"></span><sl-button class="small" @click="copyText(device.deviceId)">复制 ID</sl-button></div>
               <div class="device-actions">
                 <template x-if="device.status !== 'merged' && device.status !== 'retired'"><sl-button class="small" @click="renameDevice(device.deviceId)">重命名</sl-button></template>
-                <template x-if="device.status !== 'merged' && device.status !== 'retired'"><sl-button class="small" variant="danger" :loading="retiring" @click="retireDevice(device.deviceId)">删除设备</sl-button></template>
+                <template x-if="device.status !== 'retired'"><sl-button class="small" variant="danger" :loading="retiring" @click="retireDevice(device.deviceId)">删除设备</sl-button></template>
                 <template x-if="device.status === 'retired'"><sl-button class="small" :loading="restoringDevice" @click="restoreDevice(device.deviceId)">恢复</sl-button></template>
               </div>
             </article>
@@ -1486,7 +1486,7 @@ document.addEventListener('alpine:init', function () {
       },
       async retireDevice(id) {
         const device = this.devices.find(d => d.deviceId === id);
-        if (!device || device.status === 'merged' || device.status === 'retired') return;
+        if (!device || device.status === 'retired') return;
         const warning = '删除后设备将从列表移除，其历史用量在统计中归并到「其他设备」，会话内容保留。\n若该设备之后再次心跳，仍保持删除状态（可在状态筛选「已删除」中查看或恢复）。';
         const typed = window.prompt(warning + '\n\n请输入设备名“' + device.name + '”确认删除：', '');
         if (typed == null) return;
