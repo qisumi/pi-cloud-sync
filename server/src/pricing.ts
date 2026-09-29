@@ -52,10 +52,35 @@ const MIMO_V25_PRO_CNY_PER_MILLION = {
   cacheWrite: 0,
 } as const;
 
+/** 小米 MiMo v2.6 Flash（国内按量价，元/百万 tokens；2026-09-22 发布，沿用 v2.5 定价）
+ *  来源：mimo.mi.com 模型页（缓存命中 0.02 / 输入 1 / 输出 2；未列缓存写入费→免费）。 */
+const MIMO_V26_FLASH_CNY_PER_MILLION = {
+  input: 1,
+  output: 2,
+  cacheRead: 0.02,
+  cacheWrite: 0,
+} as const;
+
+/** 小米 MiMo v2.6 Pro（国内按量价，元/百万 tokens；2026-09-22 发布，沿用 v2.5 Pro 定价）
+ *  来源：mimo.mi.com 模型页（缓存命中 0.025 / 输入 3 / 输出 6；未列缓存写入费→免费）。 */
+const MIMO_V26_PRO_CNY_PER_MILLION = {
+  input: 3,
+  output: 6,
+  cacheRead: 0.025,
+  cacheWrite: 0,
+} as const;
+
 /** OpenAI GPT-6 Astra（官方 API Standard 短上下文定价，美元/百万 tokens）
  *  来源：developers.openai.com/api/docs/pricing（2026-09）。
- *  长上下文（>272K）为 20/2/25/75；用量记录不含上下文长度，按短上下文计。 */
+ *  长上下文（>272K）为 2× input/cache、1.5× output；用量记录不含上下文长度，按短上下文计。 */
 const GPT_6_ASTRA_USD_PER_MILLION = { input: 10.0, output: 50.0, cacheRead: 1.0, cacheWrite: 12.5 } as const;
+
+/** OpenAI GPT-6 Sol（2026-09-22 发布，取代 GPT-5.6 Sol，价格减半；>272K 长上下文同 Astra 规则）。 */
+const GPT_6_SOL_USD_PER_MILLION = { input: 2.0, output: 10.0, cacheRead: 0.2, cacheWrite: 2.5 } as const;
+
+/** OpenAI GPT-6 Luna（2026-09-22 发布，取代 GPT-5.6 Luna，价格减半；cacheRead = 10% input、
+ *  cacheWrite = 1.25× input；>272K 长上下文同 Astra 规则）。 */
+const GPT_6_LUNA_USD_PER_MILLION = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 } as const;
 
 /** OpenAI GPT-5.6 系列（官方 API Standard 短上下文定价，美元/百万 tokens）
  *  来源：developers.openai.com/api/docs/pricing（2026-09）。
@@ -110,9 +135,35 @@ export function isMimoV25Usage(provider: string, model: string): boolean {
   return isMimo && m.includes("mimo") && m.includes("v2.5") && !m.includes("pro");
 }
 
+/** MiMo v2.6 Pro（小米）：套餐接入时 cost 上报为 0。与 v2.5 按版本号互斥。 */
+export function isMimoV26ProUsage(provider: string, model: string): boolean {
+  const p = provider.trim().toLowerCase();
+  const m = model.trim().toLowerCase();
+  const isMimo = p.includes("xiaomi") || p.includes("mimo");
+  return isMimo && m.includes("mimo") && m.includes("v2.6") && m.includes("pro");
+}
+
+/** MiMo v2.6 Flash（小米，非 Pro） */
+export function isMimoV26FlashUsage(provider: string, model: string): boolean {
+  const p = provider.trim().toLowerCase();
+  const m = model.trim().toLowerCase();
+  const isMimo = p.includes("xiaomi") || p.includes("mimo");
+  return isMimo && m.includes("mimo") && m.includes("v2.6") && !m.includes("pro");
+}
+
 /** OpenAI GPT-6 Astra（新旗舰；gpt-6 别名路由到此）。按 model 精确匹配，忽略变体后缀。 */
 export function isGpt6AstraUsage(_provider: string, model: string): boolean {
   return /^gpt[-_.]?6(?:$|[-_.]?astra$)/i.test(model.trim());
+}
+
+/** OpenAI GPT-6 Sol（2026-09-22 发布；与 GPT-5.6 Sol 定价不同，需精确区分）。 */
+export function isGpt6SolUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?6[-_.]?sol$/i.test(model.trim());
+}
+
+/** OpenAI GPT-6 Luna（2026-09-22 发布；与 GPT-5.6 Luna 定价不同，需精确区分）。 */
+export function isGpt6LunaUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?6[-_.]?luna$/i.test(model.trim());
 }
 
 /** OpenAI GPT-5.6 Sol（前沿模型；gpt-5.6 别名路由到此）。按 model 精确匹配，忽略变体后缀。 */
@@ -186,11 +237,15 @@ export function deepseekCostUsd(usage: UsageForPricing, ts: number): number | nu
  * 顺序敏感：Pro / Flash 变体必须排在标准变体之前。
  */
 const ESTIMATED_PRICING: EstimatedModelPricing[] = [
+  { name: "MiMo v2.6 Pro", currency: "CNY", perMillion: MIMO_V26_PRO_CNY_PER_MILLION, match: isMimoV26ProUsage },
+  { name: "MiMo v2.6 Flash", currency: "CNY", perMillion: MIMO_V26_FLASH_CNY_PER_MILLION, match: isMimoV26FlashUsage },
   { name: "MiMo v2.5 Pro", currency: "CNY", perMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
   { name: "MiMo v2.5", currency: "CNY", perMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
   { name: "GLM-5.3-Flash", currency: "CNY", perMillion: GLM_53_FLASH_CNY_PER_MILLION, match: isGlm53FlashUsage },
   { name: "GLM-5.2/5.3", currency: "CNY", perMillion: GLM_5X_CNY_PER_MILLION, match: isGlm5Usage },
   { name: "GPT-6 Astra", currency: "USD", perMillion: GPT_6_ASTRA_USD_PER_MILLION, match: isGpt6AstraUsage },
+  { name: "GPT-6 Sol", currency: "USD", perMillion: GPT_6_SOL_USD_PER_MILLION, match: isGpt6SolUsage },
+  { name: "GPT-6 Luna", currency: "USD", perMillion: GPT_6_LUNA_USD_PER_MILLION, match: isGpt6LunaUsage },
   { name: "GPT-5.6 Sol", currency: "USD", perMillion: GPT_56_SOL_USD_PER_MILLION, match: isGpt56SolUsage },
   { name: "GPT-5.6 Terra", currency: "USD", perMillion: GPT_56_TERRA_USD_PER_MILLION, match: isGpt56TerraUsage },
   { name: "GPT-5.6 Luna", currency: "USD", perMillion: GPT_56_LUNA_USD_PER_MILLION, match: isGpt56LunaUsage },

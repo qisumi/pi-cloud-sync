@@ -68,12 +68,15 @@ const DEFAULTS: SyncConfig = {
     autoNameMax: 32,
     // 各订阅内成本相对低的模型（deepseek 2026-08-17 起峰谷定价：高峰 9-12/14-18 北京时、空闲半价；
     // v4-flash 峰值 3.0/9.0 元 vs v4-pro 9.0/27.0 元，flash 仍最便宜；
-    // openai-codex 目录价 gpt-5.6-luna 0.2/1.2 最便宜（gpt-6-astra 10/50 不适合）；
+    // openai-codex 目录价 gpt-6-luna 0.1/0.5 USD 最便宜（2026-09-22 发布，取代 gpt-5.6-luna 0.2/1.2；
+    // gpt-6-astra 10/50 不适合）；
+    // xiaomi-token-plan-cn：mimo-v2.6-flash 沿用 v2.5 按量价 1/2 元，为套餐内最低；
     // zai-coding-cn：glm-5.3-flash 已全量上线套餐且额度 3×，按量价 0.8/2.8 元低于 glm-4.7 的 2/8）
     autoNameModelByProvider: {
       deepseek: "deepseek-v4-flash",
       "zai-coding-cn": "glm-5.3-flash",
-      "openai-codex": "gpt-5.6-luna",
+      "openai-codex": "gpt-6-luna",
+      "xiaomi-token-plan-cn": "mimo-v2.6-flash",
     },
   },
 };

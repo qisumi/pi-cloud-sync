@@ -7,14 +7,19 @@
  * server/src/pricing.ts 保持一致——确保客户端与控制台金额口径统一。
  *
  * 仅当渠道上报费用为 0 / 缺失时才估算；非零费用原样保留，绝不覆盖。
- * 例外：DeepSeek V4 自 2026-08-17 起峰谷计价，pi 的静态 cost 配置无法
+ * 例外一：DeepSeek V4 自 2026-08-17 起峰谷计价，pi 的静态 cost 配置无法
  * 表达高峰/空闲差异且仍停留在旧平价，因此按时间戳重算（见 deepseekCostUsd）。
+ * 例外二：OpenAI Codex 会话提取的用量不带费用，按官方美元价补算
+ * （GPT-6 Astra/Sol/Luna、GPT-5.6 Sol/Terra/Luna）。
  */
 export const USD_CNY_REFERENCE = 6.762932;
 
+/** 估算定价：每百万 tokens 价格（CNY=国内按量价，USD=官方美元价） */
 interface EstimatedModelPricing {
   name: string;
-  cnyPerMillion: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** 计价币种：CNY 按 USD_CNY_REFERENCE 折算为美元；USD 为官方美元价直接返回 */
+  currency: "CNY" | "USD";
+  perMillion: { input: number; output: number; cacheRead: number; cacheWrite: number };
   match: (provider: string, model: string) => boolean;
 }
 
@@ -30,6 +35,33 @@ const MIMO_V25_CNY_PER_MILLION = { input: 1, output: 2, cacheRead: 0.02, cacheWr
 
 /** 小米 MiMo v2.5 Pro（国内按量价，元/百万 tokens；缓存写入限时免费） */
 const MIMO_V25_PRO_CNY_PER_MILLION = { input: 3, output: 6, cacheRead: 0.025, cacheWrite: 0 } as const;
+
+/** 小米 MiMo v2.6 Flash（国内按量价，元/百万 tokens；2026-09-22 发布，沿用 v2.5 定价）
+ *  来源：mimo.mi.com 模型页（缓存命中 0.02 / 输入 1 / 输出 2；未列缓存写入费→免费）。 */
+const MIMO_V26_FLASH_CNY_PER_MILLION = { input: 1, output: 2, cacheRead: 0.02, cacheWrite: 0 } as const;
+
+/** 小米 MiMo v2.6 Pro（国内按量价，元/百万 tokens；2026-09-22 发布，沿用 v2.5 Pro 定价）
+ *  来源：mimo.mi.com 模型页（缓存命中 0.025 / 输入 3 / 输出 6；未列缓存写入费→免费）。 */
+const MIMO_V26_PRO_CNY_PER_MILLION = { input: 3, output: 6, cacheRead: 0.025, cacheWrite: 0 } as const;
+
+/** OpenAI GPT-6 Astra（官方 API Standard 短上下文定价，美元/百万 tokens）
+ *  来源：developers.openai.com/api/docs/pricing（2026-09）。
+ *  长上下文（>272K）为 2× input/cache、1.5× output；用量记录不含上下文长度，按短上下文计。 */
+const GPT_6_ASTRA_USD_PER_MILLION = { input: 10.0, output: 50.0, cacheRead: 1.0, cacheWrite: 12.5 } as const;
+
+/** OpenAI GPT-6 Sol（2026-09-22 发布，取代 GPT-5.6 Sol，价格减半；>272K 长上下文同 Astra 规则）。 */
+const GPT_6_SOL_USD_PER_MILLION = { input: 2.0, output: 10.0, cacheRead: 0.2, cacheWrite: 2.5 } as const;
+
+/** OpenAI GPT-6 Luna（2026-09-22 发布，取代 GPT-5.6 Luna，价格减半；cacheRead = 10% input、
+ *  cacheWrite = 1.25× input；>272K 长上下文同 Astra 规则）。 */
+const GPT_6_LUNA_USD_PER_MILLION = { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 } as const;
+
+/** OpenAI GPT-5.6 系列（官方 API Standard 短上下文定价，美元/百万 tokens）
+ *  Sol 2026-08 起促销降价 $5/$30 → $4/$20（至少持续至 2026-11-21）；
+ *  cacheWrite = 1.25 × input（官方规则）。 */
+const GPT_56_SOL_USD_PER_MILLION = { input: 4.0, output: 20.0, cacheRead: 0.4, cacheWrite: 5.0 } as const;
+const GPT_56_TERRA_USD_PER_MILLION = { input: 2.0, output: 12.0, cacheRead: 0.2, cacheWrite: 2.5 } as const;
+const GPT_56_LUNA_USD_PER_MILLION = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 } as const;
 
 export interface UsageForPricing {
   provider: string;
@@ -74,6 +106,52 @@ export function isMimoV25Usage(provider: string, model: string): boolean {
   const m = model.trim().toLowerCase();
   const isMimo = p.includes("xiaomi") || p.includes("mimo");
   return isMimo && m.includes("mimo") && m.includes("v2.5") && !m.includes("pro");
+}
+
+/** MiMo v2.6 Pro（小米）：套餐接入时 cost 上报为 0。与 v2.5 按版本号互斥。 */
+export function isMimoV26ProUsage(provider: string, model: string): boolean {
+  const p = provider.trim().toLowerCase();
+  const m = model.trim().toLowerCase();
+  const isMimo = p.includes("xiaomi") || p.includes("mimo");
+  return isMimo && m.includes("mimo") && m.includes("v2.6") && m.includes("pro");
+}
+
+/** MiMo v2.6 Flash（小米，非 Pro） */
+export function isMimoV26FlashUsage(provider: string, model: string): boolean {
+  const p = provider.trim().toLowerCase();
+  const m = model.trim().toLowerCase();
+  const isMimo = p.includes("xiaomi") || p.includes("mimo");
+  return isMimo && m.includes("mimo") && m.includes("v2.6") && !m.includes("pro");
+}
+
+/** OpenAI GPT-6 Astra（新旗舰；gpt-6 别名路由到此）。按 model 精确匹配，忽略变体后缀。 */
+export function isGpt6AstraUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?6(?:$|[-_.]?astra$)/i.test(model.trim());
+}
+
+/** OpenAI GPT-6 Sol（2026-09-22 发布；与 GPT-5.6 Sol 定价不同，需精确区分）。 */
+export function isGpt6SolUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?6[-_.]?sol$/i.test(model.trim());
+}
+
+/** OpenAI GPT-6 Luna（2026-09-22 发布；与 GPT-5.6 Luna 定价不同，需精确区分）。 */
+export function isGpt6LunaUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?6[-_.]?luna$/i.test(model.trim());
+}
+
+/** OpenAI GPT-5.6 Sol（前沿模型；gpt-5.6 别名路由到此）。按 model 精确匹配，忽略变体后缀。 */
+export function isGpt56SolUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?5[.-]?6[-_.]?sol$/i.test(model.trim());
+}
+
+/** OpenAI GPT-5.6 Terra */
+export function isGpt56TerraUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?5[.-]?6[-_.]?terra$/i.test(model.trim());
+}
+
+/** OpenAI GPT-5.6 Luna */
+export function isGpt56LunaUsage(_provider: string, model: string): boolean {
+  return /^gpt[-_.]?5[.-]?6[-_.]?luna$/i.test(model.trim());
 }
 
 /* ---------------- DeepSeek V4 峰谷计价（2026-08-17 起） ---------------- */
@@ -127,17 +205,28 @@ export function deepseekCostUsd(usage: UsageForPricing, ts: number): number | nu
   return cny / USD_CNY_REFERENCE;
 }
 
-/** 顺序敏感：Pro / Flash 变体必须排在标准变体之前。 */
+/**
+ * 已知「套餐上报 0 费用」及「Codex 提取无费用」的模型及其公开按量价。
+ * 顺序敏感：Pro / Flash 变体必须排在标准变体之前。
+ */
 const ESTIMATED_PRICING: EstimatedModelPricing[] = [
-  { name: "MiMo v2.5 Pro", cnyPerMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
-  { name: "MiMo v2.5", cnyPerMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
-  { name: "GLM-5.3-Flash", cnyPerMillion: GLM_53_FLASH_CNY_PER_MILLION, match: isGlm53FlashUsage },
-  { name: "GLM-5.2/5.3", cnyPerMillion: GLM_5X_CNY_PER_MILLION, match: isGlm5Usage },
+  { name: "MiMo v2.6 Pro", currency: "CNY", perMillion: MIMO_V26_PRO_CNY_PER_MILLION, match: isMimoV26ProUsage },
+  { name: "MiMo v2.6 Flash", currency: "CNY", perMillion: MIMO_V26_FLASH_CNY_PER_MILLION, match: isMimoV26FlashUsage },
+  { name: "MiMo v2.5 Pro", currency: "CNY", perMillion: MIMO_V25_PRO_CNY_PER_MILLION, match: isMimoV25ProUsage },
+  { name: "MiMo v2.5", currency: "CNY", perMillion: MIMO_V25_CNY_PER_MILLION, match: isMimoV25Usage },
+  { name: "GLM-5.3-Flash", currency: "CNY", perMillion: GLM_53_FLASH_CNY_PER_MILLION, match: isGlm53FlashUsage },
+  { name: "GLM-5.2/5.3", currency: "CNY", perMillion: GLM_5X_CNY_PER_MILLION, match: isGlm5Usage },
+  { name: "GPT-6 Astra", currency: "USD", perMillion: GPT_6_ASTRA_USD_PER_MILLION, match: isGpt6AstraUsage },
+  { name: "GPT-6 Sol", currency: "USD", perMillion: GPT_6_SOL_USD_PER_MILLION, match: isGpt6SolUsage },
+  { name: "GPT-6 Luna", currency: "USD", perMillion: GPT_6_LUNA_USD_PER_MILLION, match: isGpt6LunaUsage },
+  { name: "GPT-5.6 Sol", currency: "USD", perMillion: GPT_56_SOL_USD_PER_MILLION, match: isGpt56SolUsage },
+  { name: "GPT-5.6 Terra", currency: "USD", perMillion: GPT_56_TERRA_USD_PER_MILLION, match: isGpt56TerraUsage },
+  { name: "GPT-5.6 Luna", currency: "USD", perMillion: GPT_56_LUNA_USD_PER_MILLION, match: isGpt56LunaUsage },
 ];
 
 /**
- * 渠道上报费用非零则保留；否则按已知套餐模型（MiMo v2.5 系列 / GLM-5.x）的
- * 公开按量价估算，返回 USD。
+ * 渠道上报费用非零则保留；否则按已知模型（MiMo v2.5/v2.6 系列 / GLM-5.x /
+ * GPT-5.6 / GPT-6 系列）的公开按量价估算，返回 USD。
  * DeepSeek V4 自 2026-08-17 起始终按时间戳峰谷重算（覆盖过期平价）。
  */
 export function estimateUsageCostUsd(usage: UsageForPricing, reportedCost: number, ts: number = Date.now()): number {
@@ -146,13 +235,14 @@ export function estimateUsageCostUsd(usage: UsageForPricing, reportedCost: numbe
   if (Number.isFinite(reportedCost) && reportedCost > 0) return reportedCost;
   for (const pricing of ESTIMATED_PRICING) {
     if (pricing.match(usage.provider, usage.model)) {
-      const cny =
-        (usage.input * pricing.cnyPerMillion.input +
-          usage.output * pricing.cnyPerMillion.output +
-          usage.cacheRead * pricing.cnyPerMillion.cacheRead +
-          usage.cacheWrite * pricing.cnyPerMillion.cacheWrite) /
+      const amount =
+        (usage.input * pricing.perMillion.input +
+          usage.output * pricing.perMillion.output +
+          usage.cacheRead * pricing.perMillion.cacheRead +
+          usage.cacheWrite * pricing.perMillion.cacheWrite) /
         1_000_000;
-      return cny / USD_CNY_REFERENCE;
+      // CNY 按量价需折算为美元；USD 官方价直接返回
+      return pricing.currency === "USD" ? amount : amount / USD_CNY_REFERENCE;
     }
   }
   return 0;

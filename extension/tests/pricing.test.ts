@@ -4,9 +4,16 @@ import {
   estimateUsageCostUsd,
   isMimoV25Usage,
   isMimoV25ProUsage,
+  isMimoV26FlashUsage,
+  isMimoV26ProUsage,
   isGlm5Usage,
   isGlm52Usage,
   isGlm53FlashUsage,
+  isGpt6AstraUsage,
+  isGpt6SolUsage,
+  isGpt6LunaUsage,
+  isGpt56SolUsage,
+  isGpt56LunaUsage,
   isDeepseekV4Usage,
   isDeepseekPeakHour,
   USD_CNY_REFERENCE,
@@ -63,6 +70,77 @@ test("识别函数：Pro 与 v2.5 互斥，且要求 mimo 渠道", () => {
   // 已下线 mimo-v2-pro 不识别
   assert.ok(!isMimoV25Usage("xiaomi", "mimo-v2-pro"));
   assert.ok(!isMimoV25ProUsage("xiaomi", "mimo-v2-pro"));
+});
+
+test("MiMo v2.6 Flash / Pro 补算与识别（沿用 v2.5 定价，版本号互斥）", () => {
+  // 国内按量价（元/百万 tokens）：v2.6 flash in1/out2/cr0.02/cw0；pro in3/out6/cr0.025
+  const flash = estimateUsageCostUsd(
+    { provider: "xiaomi-token-plan-cn", model: "mimo-v2.6-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(flash * USD_CNY_REFERENCE - 3.02) < 1e-6);
+
+  const pro = estimateUsageCostUsd(
+    { provider: "xiaomi-token-plan-cn", model: "mimo-v2.6-pro", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(pro * USD_CNY_REFERENCE - 9.025) < 1e-6);
+
+  // 识别：v2.6 与 v2.5 按版本号互斥；Pro 与非 Pro 互斥
+  assert.ok(isMimoV26ProUsage("xiaomi-token-plan-cn", "mimo-v2.6-pro"));
+  assert.ok(isMimoV26FlashUsage("xiaomi", "mimo-v2.6-flash"));
+  assert.ok(!isMimoV26ProUsage("xiaomi", "mimo-v2.6-flash"));
+  assert.ok(!isMimoV26FlashUsage("xiaomi", "mimo-v2.5"));
+  assert.ok(!isMimoV25Usage("xiaomi", "mimo-v2.6-flash"));
+  assert.ok(!isMimoV26ProUsage("deepseek", "mimo-v2.6-pro"));
+  // 非 mimo-v2.6 不识别（如旧 mimo-v2-pro）
+  assert.ok(!isMimoV26FlashUsage("xiaomi", "mimo-v2-pro"));
+  // 渠道上报非零费用优先
+  assert.equal(
+    estimateUsageCostUsd({ provider: "xiaomi", model: "mimo-v2.6-flash", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.5),
+    0.5,
+  );
+});
+
+test("GPT-6 Astra / Sol / Luna 与 GPT-5.6 系列按官方美元价补算（客户端与服务端口径一致）", () => {
+  // 官方 Standard 短上下文价（美元/百万 tokens）；USD 直接返回，不经 USD_CNY_REFERENCE 折算
+  const astra = estimateUsageCostUsd(
+    { provider: "openai-codex", model: "gpt-6-astra", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(astra - 73.5) < 1e-9); // 10 + 50 + 1 + 12.5
+
+  const sol = estimateUsageCostUsd(
+    { provider: "openai-codex", model: "gpt-6-sol", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(sol - 14.7) < 1e-9); // 2 + 10 + 0.2 + 2.5
+
+  const luna = estimateUsageCostUsd(
+    { provider: "openai-codex", model: "gpt-6-luna", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(luna - 0.735) < 1e-9); // 0.1 + 0.5 + 0.01 + 0.125
+
+  // gpt-6 别名路由到 Astra；无后缀 gpt-5.6 不匹配任何变体
+  assert.ok(isGpt6AstraUsage("openai-codex", "gpt-6"));
+  assert.ok(!isGpt6SolUsage("openai", "gpt-6"));
+  assert.ok(!isGpt6LunaUsage("openai", "gpt-6-sol"));
+  assert.ok(isGpt6SolUsage("openai", "gpt-6-sol"));
+  assert.ok(isGpt6LunaUsage("codex", "gpt-6-luna"));
+  // GPT-5.6 同名变体严格区分
+  assert.ok(isGpt56SolUsage("openai", "gpt-5.6-sol"));
+  assert.ok(!isGpt56LunaUsage("openai", "gpt-6-luna"));
+  const luna56 = estimateUsageCostUsd(
+    { provider: "openai", model: "gpt-5.6-luna", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+    0,
+  );
+  assert.ok(Math.abs(luna56 - 0.2) < 1e-9);
+  // 渠道上报非零费用优先
+  assert.equal(
+    estimateUsageCostUsd({ provider: "codex", model: "gpt-6-sol", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.3),
+    0.3,
+  );
 });
 
 test("GLM-5.2 补算仍正常工作（回归保护）", () => {

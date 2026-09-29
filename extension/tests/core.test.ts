@@ -291,7 +291,8 @@ test("session: config defaults include independent AI auto-name model mapping", 
   assert.equal(c.session.autoNameMax, 32);
   assert.equal(c.session.autoNameModelByProvider["deepseek"], "deepseek-v4-flash");
   assert.equal(c.session.autoNameModelByProvider["zai-coding-cn"], "glm-5.3-flash");
-  assert.equal(c.session.autoNameModelByProvider["openai-codex"], "gpt-5.6-luna");
+  assert.equal(c.session.autoNameModelByProvider["openai-codex"], "gpt-6-luna");
+  assert.equal(c.session.autoNameModelByProvider["xiaomi-token-plan-cn"], "mimo-v2.6-flash");
   // saveConfig 往返保留 session
   saveConfig(c);
   const c2 = loadConfig();

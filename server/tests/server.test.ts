@@ -109,6 +109,45 @@ test("GPT-6 Astra zero-cost usage estimated at official USD pricing", () => {
   assert.equal(usageCostUsd({ provider: "codex", model: "gpt-6-astra", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.5), 0.5);
 });
 
+test("MiMo v2.6 Flash / Pro zero-cost usage falls back to published token pricing", () => {
+  // 沿用 v2.5 定价（元/百万 tokens）：flash in1/out2/cr0.02/cw0；pro in3/out6/cr0.025
+  const flash = usageCostUsd(
+    { provider: "xiaomi-token-plan-cn", model: "mimo-v2.6-flash", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(flash * USD_CNY_REFERENCE - 3.02) < 1e-6);
+  const pro = usageCostUsd(
+    { provider: "xiaomi-token-plan-cn", model: "mimo-v2.6-pro", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(pro * USD_CNY_REFERENCE - 9.025) < 1e-6);
+  // 渠道上报非零费用优先；v2.5 与 v2.6 按版本号互斥不串价
+  assert.equal(usageCostUsd({ provider: "xiaomi", model: "mimo-v2.6-pro", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.5), 0.5);
+});
+
+test("GPT-6 Sol / Luna zero-cost usage estimated at official USD pricing", () => {
+  // 2026-09-22 发布，取代 GPT-5.6 同名模型，价格减半（美元/百万 tokens）：sol 2/10/0.2/2.5，luna 0.1/0.5/0.01/0.125
+  const sol = usageCostUsd(
+    { provider: "openai-codex", model: "gpt-6-sol", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(sol - 14.7) < 1e-9); // 2 + 10 + 0.2 + 2.5
+
+  const luna = usageCostUsd(
+    { provider: "openai-codex", model: "gpt-6-luna", input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+    0,
+  );
+  assert.ok(Math.abs(luna - 0.735) < 1e-9); // 0.1 + 0.5 + 0.01 + 0.125
+
+  // 与 GPT-5.6 同名变体严格区分，不串价
+  assert.ok(Math.abs(usageCostUsd({ provider: "openai", model: "gpt-5.6-sol", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0) - 4) < 1e-9);
+  assert.ok(Math.abs(usageCostUsd({ provider: "openai", model: "gpt-5.6-luna", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0) - 0.2) < 1e-9);
+  // 无后缀别名 gpt-6 仍路由到 Astra，不误匹配 sol/luna
+  assert.ok(Math.abs(usageCostUsd({ provider: "openai", model: "gpt-6", input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }, 0) - 10) < 1e-9);
+  // 渠道上报非零费用优先
+  assert.equal(usageCostUsd({ provider: "codex", model: "gpt-6-sol", input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, 0.3), 0.3);
+});
+
 test("GLM-5.3-Flash zero-cost usage estimated at its own 1/10 pricing, not GLM-5.3's", () => {
   // 列表价（元/百万 tokens）：0.8/2.8/缓存命中 0.23；缓存存储限时免费 → cacheWrite 0
   const flash = usageCostUsd(
