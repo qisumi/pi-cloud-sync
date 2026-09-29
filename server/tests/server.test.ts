@@ -1120,17 +1120,18 @@ test("web stats: aggregate usage by day/model/device + filters", async (t) => {
   assert.equal(last1dJson.data.summary.requests, 0);
 
   // 1 天范围按小时聚合；GLM-5.2 的零费用按官方价格估算。
-  const now = Date.now();
+  // 时间锚定到当前小时的整点，避免分针 < 5 时 now-5min / now-2min 跨小时导致桶数波动。
+  const hourFloor = Math.floor(Date.now() / 3600_000) * 3600_000;
   await pushSessions("dev-glm", [{
     uuid: "stats-sess-glm",
     cwd: "/proj-glm",
     baseVersion: 0,
     entries: [
-      usageEntry("g1", new Date(now - 70 * 60_000).toISOString(), "assistant", "glm-5.2", { input: 1_000_000, output: 0, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
-      usageEntry("g2", new Date(now - 5 * 60_000).toISOString(), "assistant", "glm-5.2-high", { input: 0, output: 1_000_000, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
-      usageEntry("u1", new Date(now - 2 * 60_000).toISOString(), "assistant", "", { input: 10, output: 0, totalTokens: 10, cost: { total: 0 } }),
+      usageEntry("g1", new Date(hourFloor - 30 * 60_000).toISOString(), "assistant", "glm-5.2", { input: 1_000_000, output: 0, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
+      usageEntry("g2", new Date(hourFloor + 10 * 60_000).toISOString(), "assistant", "glm-5.2-high", { input: 0, output: 1_000_000, totalTokens: 1_000_000, cost: { total: 0 } }, "zai-coding-cn"),
+      usageEntry("u1", new Date(hourFloor + 20 * 60_000).toISOString(), "assistant", "", { input: 10, output: 0, totalTokens: 10, cost: { total: 0 } }),
     ],
-    mtime: now,
+    mtime: Date.now(),
   }]);
   const hourly = await fetch(`${ctx.base}/api/v1/web/stats?days=1`, { headers: headers(ctx) });
   const hourlyJson = (await hourly.json()) as { data: { summary: { cost: number }; byHour: Array<{ date: string; total: number }> } };
