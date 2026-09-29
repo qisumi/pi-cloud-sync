@@ -21,6 +21,13 @@ const aggregateColumns = `COALESCE(SUM(requests), 0) AS requests,
   COALESCE(SUM(total_tokens), 0) AS total,
   COALESCE(SUM(cost), 0) AS cost`;
 
+/** 已删除（退役）设备与无主用量行在统计中的虚拟聚合桶 */
+export const OTHER_DEVICE_ID = "__other__";
+export const OTHER_DEVICE_LABEL = "其他设备";
+const isOtherDevice = `(d.device_id IS NULL OR d.status = 'retired')`;
+const foldedDeviceId = `CASE WHEN ${isOtherDevice} THEN '${OTHER_DEVICE_ID}' ELSE u.source_device_id END`;
+const foldedDeviceLabel = `CASE WHEN ${isOtherDevice} THEN '${OTHER_DEVICE_LABEL}' ELSE COALESCE(d.name, u.source_device, 'unknown') END`;
+
 /** 仅对已物化的 session_usage 做 SQL 聚合，不再解析会话正文。 */
 export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
   app.get<{
@@ -43,7 +50,13 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
       clauses.push(`u.occurred_at >= ?`);
       params.push(cutoff);
     }
-    if (deviceId) {
+    if (deviceId === OTHER_DEVICE_ID) {
+      // 「其他设备」虚拟桶：退役设备 + 无主用量行（无匹配设备记录或 device_id 为空）
+      clauses.push(
+        `(u.source_device_id IN (SELECT device_id FROM devices WHERE status = 'retired')
+          OR u.source_device_id NOT IN (SELECT device_id FROM devices))`,
+      );
+    } else if (deviceId) {
       clauses.push(`u.source_device_id = ?`);
       params.push(deviceId);
     }
@@ -55,8 +68,8 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
     const summary = dbs.db
       .prepare(
         `SELECT ${aggregateColumns}, COUNT(DISTINCT session_uuid) AS sessions,
-           COUNT(DISTINCT NULLIF(source_device_id, '')) AS devices
-         FROM session_usage u ${where}`,
+           COUNT(DISTINCT CASE WHEN ${isOtherDevice} THEN '${OTHER_DEVICE_ID}' ELSE NULLIF(u.source_device_id, '') END) AS devices
+         FROM session_usage u LEFT JOIN devices d ON d.device_id = u.source_device_id ${where}`,
       )
       .get(...params) as AggregateRow & { sessions: number; devices: number };
 
@@ -85,10 +98,10 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
       .all(...params) as Array<AggregateRow & { label: string }>;
     const deviceRows = dbs.db
       .prepare(
-        `SELECT u.source_device_id AS device_id, COALESCE(d.name, u.source_device, 'unknown') AS label,
+        `SELECT ${foldedDeviceId} AS device_id, ${foldedDeviceLabel} AS label,
            ${aggregateColumns} FROM session_usage u
          LEFT JOIN devices d ON d.device_id = u.source_device_id ${where}
-         GROUP BY u.source_device_id, label ORDER BY total DESC`,
+         GROUP BY 1, 2 ORDER BY total DESC`,
       )
       .all(...params) as Array<AggregateRow & { device_id: string; label: string }>;
 
@@ -97,10 +110,18 @@ export function registerStatsRoutes(app: FastifyInstance, dbs: SyncDb) {
     const devices = dbs.db
       .prepare(
         `SELECT DISTINCT u.source_device_id AS device_id, COALESCE(d.name, u.source_device, 'unknown') AS name
-         FROM session_usage u LEFT JOIN devices d ON d.device_id = u.source_device_id ${optionClauses}
+         FROM session_usage u LEFT JOIN devices d ON d.device_id = u.source_device_id
+         ${optionClauses}${optionClauses ? " AND " : "WHERE "}d.device_id IS NOT NULL AND d.status <> 'retired'
          ORDER BY name`,
       )
       .all(...optionParams) as Array<{ device_id: string; name: string }>;
+    const hasOtherUsage = dbs.db
+      .prepare(
+        `SELECT 1 FROM session_usage u LEFT JOIN devices d ON d.device_id = u.source_device_id
+         ${optionClauses}${optionClauses ? " AND " : "WHERE "}${isOtherDevice} LIMIT 1`,
+      )
+      .get(...optionParams);
+    if (hasOtherUsage) devices.push({ device_id: OTHER_DEVICE_ID, name: OTHER_DEVICE_LABEL });
     const models = dbs.db
       .prepare(`SELECT DISTINCT CASE WHEN model = '' THEN '(unknown)' ELSE model END AS model FROM session_usage u ${optionClauses} ORDER BY model`)
       .all(...optionParams) as Array<{ model: string }>;

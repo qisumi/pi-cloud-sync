@@ -1510,3 +1510,151 @@ test("sync v2 and devices: cursor deltas, independent usage, permanent merge and
   assert.equal(reactivatedDevice.totalTokens, 6, "重新上线后的新用量回到旧 deviceId");
   assert.equal(historicalTarget.totalTokens, 136, "已迁移历史不会自动回迁");
 });
+
+test("device retire: stats folded into 其他设备, heartbeat stays retired, restore works", async (t) => {
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+
+  // 第二台设备（模拟之后卖掉的旧笔记本）
+  const hb = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
+    body: JSON.stringify({
+      deviceId: "",
+      name: "old-laptop",
+      platform: "darwin",
+      piVersion: "0.83.0",
+      extensionVersion: "0.2.0",
+    }),
+  });
+  const oldDeviceId = ((await hb.json()) as { data: { deviceId: string } }).data.deviceId;
+  const oldHeaders = headers(ctx, { "x-device-id": oldDeviceId, "x-device-name": "old-laptop" });
+
+  const pushUsage = async (extra: Record<string, string>, eventId: string, totalTokens: number, cost: number) => {
+    const res = await fetch(`${ctx.base}/api/v2/sessions/push`, {
+      method: "POST",
+      headers: headers(ctx, extra),
+      body: JSON.stringify({
+        sessions: [],
+        usageEvents: [{
+          id: eventId,
+          sessionUuid: `usage-${eventId}`,
+          occurredAt: Date.now(),
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          input: totalTokens - 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens,
+          cost,
+        }],
+      }),
+    });
+    assert.equal(res.status, 200);
+  };
+  await pushUsage({}, "dev-a-usage", 8, 0.0008);
+  await pushUsage({ "x-device-id": oldDeviceId, "x-device-name": "old-laptop" }, "old-usage", 16, 0.0016);
+
+  // 确认名不匹配 → 400
+  const wrongDelete = await fetch(`${ctx.base}/api/v1/devices/${oldDeviceId}`, {
+    method: "DELETE",
+    headers: headers(ctx),
+    body: JSON.stringify({ confirmName: "wrong-name" }),
+  });
+  assert.equal(wrongDelete.status, 400);
+
+  // 正确删除（退役）
+  const del = await fetch(`${ctx.base}/api/v1/devices/${oldDeviceId}`, {
+    method: "DELETE",
+    headers: headers(ctx),
+    body: JSON.stringify({ confirmName: "old-laptop" }),
+  });
+  assert.equal(del.status, 200);
+  const delJson = (await del.json()) as { data: { retiredAt: number; affected: { usageRows: number } } };
+  assert.ok(delJson.data.retiredAt > 0);
+  assert.equal(delJson.data.affected.usageRows, 1);
+
+  // 设备列表：retired 状态 + retiredAt
+  const devices = await fetch(`${ctx.base}/api/v1/devices`, { headers: headers(ctx) });
+  const devicesJson = (await devices.json()) as {
+    data: Array<{ deviceId: string; name: string; status: string; retiredAt: number | null; totalTokens: number }>;
+  };
+  const retired = devicesJson.data.find((d) => d.deviceId === oldDeviceId)!;
+  const mine = devicesJson.data.find((d) => d.deviceId === ctx.deviceId)!;
+  assert.equal(retired.status, "retired");
+  assert.equal(retired.retiredAt, delJson.data.retiredAt);
+  assert.equal(retired.totalTokens, 16, "退役设备历史用量保留在原 device_id 上");
+  assert.equal(mine.status, "active");
+  assert.equal(mine.retiredAt, null);
+
+  // 已删除设备再次心跳：保持 retired，不复活、不改名
+  const rehb = await fetch(`${ctx.base}/api/v1/devices/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ctx.token}` },
+    body: JSON.stringify({ deviceId: oldDeviceId, name: "old-laptop-back", platform: "darwin", piVersion: "0.83.0", extensionVersion: "0.2.0" }),
+  });
+  assert.equal(rehb.status, 200);
+  const rehbJson = (await rehb.json()) as { data: { reactivated: boolean } };
+  assert.equal(rehbJson.data.reactivated, false);
+  const devicesAfterHb = await fetch(`${ctx.base}/api/v1/devices`, { headers: headers(ctx) });
+  const afterHbJson = (await devicesAfterHb.json()) as { data: Array<{ deviceId: string; name: string; status: string }> };
+  const afterHb = afterHbJson.data.find((d) => d.deviceId === oldDeviceId)!;
+  assert.equal(afterHb.status, "retired");
+  assert.equal(afterHb.name, "old-laptop");
+
+  // 统计归并：byDevice 出现 __other__（其他设备），old 设备不再单独出现
+  const stats = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, { headers: headers(ctx) });
+  const statsJson = (await stats.json()) as {
+    data: {
+      summary: { total: number; devices: number };
+      byDevice: Array<{ deviceId: string; device: string; total: number }>;
+      devices: Array<{ deviceId: string; name: string }>;
+    };
+  };
+  const otherRow = statsJson.data.byDevice.find((row) => row.deviceId === "__other__")!;
+  assert.equal(otherRow.device, "其他设备");
+  assert.equal(otherRow.total, 16);
+  assert.equal(statsJson.data.byDevice.some((row) => row.deviceId === oldDeviceId), false);
+  assert.equal(statsJson.data.summary.total, 24);
+  assert.equal(statsJson.data.summary.devices, 2, "dev-a + 其他设备 两个桶");
+  assert.ok(statsJson.data.devices.some((d) => d.deviceId === "__other__" && d.name === "其他设备"));
+  assert.equal(statsJson.data.devices.some((d) => d.deviceId === oldDeviceId), false, "筛选列表不再出现已删除设备");
+
+  // 「其他设备」筛选
+  const statsOther = await fetch(`${ctx.base}/api/v1/web/stats?days=all&deviceId=__other__`, { headers: headers(ctx) });
+  const statsOtherJson = (await statsOther.json()) as { data: { summary: { total: number }; byDevice: Array<{ deviceId: string }> } };
+  assert.equal(statsOtherJson.data.summary.total, 16);
+  assert.equal(statsOtherJson.data.byDevice.length, 1);
+  assert.equal(statsOtherJson.data.byDevice[0].deviceId, "__other__");
+
+  // 恢复
+  const badRestore = await fetch(`${ctx.base}/api/v1/devices/${ctx.deviceId}/restore`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({}),
+  });
+  assert.equal(badRestore.status, 400, "仅退役设备可恢复");
+
+  const restore = await fetch(`${ctx.base}/api/v1/devices/${oldDeviceId}/restore`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({}),
+  });
+  assert.equal(restore.status, 200);
+
+  const statsAfterRestore = await fetch(`${ctx.base}/api/v1/web/stats?days=all`, { headers: headers(ctx) });
+  const statsAfterRestoreJson = (await statsAfterRestore.json()) as {
+    data: { byDevice: Array<{ deviceId: string; total: number }>; devices: Array<{ deviceId: string }> };
+  };
+  const restoredRow = statsAfterRestoreJson.data.byDevice.find((row) => row.deviceId === oldDeviceId)!;
+  assert.equal(restoredRow.total, 16);
+  assert.equal(statsAfterRestoreJson.data.byDevice.some((row) => row.deviceId === "__other__"), false);
+  assert.ok(statsAfterRestoreJson.data.devices.some((d) => d.deviceId === oldDeviceId));
+
+  const devicesFinal = await fetch(`${ctx.base}/api/v1/devices`, { headers: headers(ctx) });
+  const devicesFinalJson = (await devicesFinal.json()) as { data: Array<{ deviceId: string; status: string; retiredAt: number | null }> };
+  const restored = devicesFinalJson.data.find((d) => d.deviceId === oldDeviceId)!;
+  assert.equal(restored.status, "active");
+  assert.equal(restored.retiredAt, null);
+});

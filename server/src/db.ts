@@ -208,6 +208,7 @@ export class SyncDb {
     ensure("devices", "status", "TEXT NOT NULL DEFAULT 'active'");
     ensure("devices", "merged_into", "TEXT");
     ensure("devices", "merged_at", "INTEGER");
+    ensure("devices", "retired_at", "INTEGER");
     ensure("devices", "is_legacy", "INTEGER NOT NULL DEFAULT 0");
     ensure("devices", "name_locked", "INTEGER NOT NULL DEFAULT 0");
     ensure("objects", "updated_by_device_id", "TEXT NOT NULL DEFAULT ''");

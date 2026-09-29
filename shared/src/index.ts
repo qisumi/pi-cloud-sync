@@ -244,9 +244,10 @@ export interface DeviceInfo {
   extensionVersion: string;
   lastSeen: number;
   createdAt: number;
-  status: "active" | "legacy" | "merged";
+  status: "active" | "legacy" | "merged" | "retired";
   mergedInto: string | null;
   mergedAt: number | null;
+  retiredAt: number | null;
   isLegacy: boolean;
   sessionCount: number;
   entryCount: number;

@@ -169,7 +169,8 @@ async function cmdSyncDevices(ctx: ExtensionCommandContext): Promise<string> {
         (d) =>
           `• [${d.status}] ${d.name}${d.isLegacy ? "（历史来源）" : ""}  ${d.platform || "-"} · pi ${d.piVersion || "-"}\n` +
           `  会话 ${d.sessionCount} · 条目 ${d.entryCount} · tokens ${d.totalTokens} · 费用 $${d.totalCost.toFixed(4)} · ${new Date(d.lastSeen).toLocaleString()}` +
-          (d.mergedInto ? `\n  已合并到 ${d.mergedInto}` : ""),
+          (d.mergedInto ? `\n  已合并到 ${d.mergedInto}` : "") +
+          (d.retiredAt ? `\n  已删除（${new Date(d.retiredAt).toLocaleString()}），统计已归并到「其他设备」` : ""),
       )
       .join("\n");
   } catch (err) {

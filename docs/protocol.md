@@ -25,6 +25,16 @@
    - 否则逐字段比较 `version`：版本高者胜；数组字段版本相同 → 并集合并（如包清单）；同版本不同值 → 记入 `conflicts`，服务器值保留。
 5. 拉取响应包含合并后内容与完整字段版本映射，客户端持久化用于下次 diff。
 
+## 设备删除（退役）
+
+不再使用的设备（如卖掉的笔记本）可删除：`DELETE /api/v1/devices/:id`（body `confirmName` 必须与设备名一致）。
+
+- 会话/条目/用量行**不迁移、不删除**，保留原 `device_id`；
+- 设备置为 `retired` 并记录 `retired_at`，从「当前设备」列表与统计筛选中隐藏；
+- `/api/v1/web/stats` 的设备分布把退役设备（含无主用量行）归并为虚拟桶 `__other__`（显示名「其他设备」），可用 `deviceId=__other__` 筛选；
+- 已退役设备再次心跳不会复活（不占用合并语义的 reactivated），需要时在 Web 控制台「已删除」筛选中 `POST /api/v1/devices/:id/restore` 恢复；
+- 与 merge 的区别：merge 把历史永久改写到目标设备；retire 保留原归属，仅展示层归并，可随时恢复。
+
 ## 端到端示例
 
 ```
@@ -38,6 +48,8 @@ POST /api/v1/conflicts/:id/resolve      # { resolution: keep-a|keep-b|manual, co
 POST /api/v1/sessions/restore           # { uuid }
 GET  /api/v1/devices                    # 设备列表
 PATCH /api/v1/devices/:id               # { name } 重命名
+DELETE /api/v1/devices/:id              # { confirmName } 删除（退役）设备，统计归并到「其他设备」
+POST /api/v1/devices/:id/restore        # 恢复已退役设备
 POST /api/v1/devices/merge/preview      # { sourceDeviceIds, targetDeviceId }
 POST /api/v1/devices/merge              # 上述字段 + confirmTargetName，事务化永久合并
 GET  /api/v1/health                     # 健康检查

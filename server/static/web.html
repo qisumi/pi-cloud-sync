@@ -863,7 +863,7 @@
         <div class="toolbar">
           <div class="search"><sl-input placeholder="搜索设备名、平台或 ID…" autocomplete="off" :value="deviceSearch" @sl-input="deviceSearch = $event.target.value"><i data-lucide="search" aria-hidden="true" slot="prefix"></i></sl-input></div>
           <sl-select hoist aria-label="设备状态" :value="deviceStatus" @sl-change="deviceStatus = $event.target.value">
-            <sl-option value="current">当前设备</sl-option><sl-option value="active">仅 active</sl-option><sl-option value="legacy">仅历史来源</sl-option><sl-option value="merged">已合并</sl-option><sl-option value="all">全部状态</sl-option>
+            <sl-option value="current">当前设备</sl-option><sl-option value="active">仅 active</sl-option><sl-option value="legacy">仅历史来源</sl-option><sl-option value="retired">已删除</sl-option><sl-option value="merged">已合并</sl-option><sl-option value="all">全部状态</sl-option>
           </sl-select>
           <sl-select hoist aria-label="设备合并目标" :value="deviceMergeTarget" placeholder="选择合并目标…" @sl-change="deviceMergeTarget = $event.target.value">
             <sl-option value="">选择合并目标…</sl-option>
@@ -878,7 +878,7 @@
           <template x-for="device in deviceRows" :key="device.deviceId">
             <article class="card device-card">
               <div class="device-top">
-                <sl-checkbox class="device-select" :checked="selectedDevices.has(device.deviceId)" :disabled="device.status === 'merged'" @sl-change="toggleSelectDevice(device.deviceId, $event.target.checked)" aria-label="选择设备"></sl-checkbox>
+                <sl-checkbox class="device-select" :checked="selectedDevices.has(device.deviceId)" :disabled="device.status === 'merged' || device.status === 'retired'" @sl-change="toggleSelectDevice(device.deviceId, $event.target.checked)" aria-label="选择设备"></sl-checkbox>
                 <div class="device-avatar"><i :data-lucide="platformGlyph(device.platform)" aria-hidden="true">◈</i></div>
                 <div class="device-main"><div class="device-name" x-text="device.name || '未命名设备'"></div><div class="device-platform" x-text="device.platform || '未知平台'"></div></div>
                 <div class="device-status" :class="{ online: device.online && device.status === 'active' }"><span class="status-dot" :class="{ online: device.online && device.status === 'active' }"></span><span x-text="device.status"></span></div>
@@ -890,8 +890,13 @@
                 <div class="device-fact"><span>最近心跳</span><strong :title="fmtTime(device.lastSeen)" x-text="fmtRelative(device.lastSeen)"></strong></div>
               </div>
               <template x-if="device.mergedInto"><div class="result-note" style="margin-top:10px" x-text="'历史已永久合并到 ' + device.mergedInto"></div></template>
+              <template x-if="device.retiredAt"><div class="result-note" style="margin-top:10px" x-text="'已于 ' + fmtTime(device.retiredAt) + ' 删除；历史统计已归并到「其他设备」，若再次心跳仍保持删除状态'"></div></template>
               <div class="device-id-row"><span class="device-id" :title="device.deviceId" x-text="device.deviceId"></span><sl-button class="small" @click="copyText(device.deviceId)">复制 ID</sl-button></div>
-              <div class="device-actions"><template x-if="device.status !== 'merged'"><sl-button class="small" @click="renameDevice(device.deviceId)">重命名</sl-button></template></div>
+              <div class="device-actions">
+                <template x-if="device.status !== 'merged' && device.status !== 'retired'"><sl-button class="small" @click="renameDevice(device.deviceId)">重命名</sl-button></template>
+                <template x-if="device.status !== 'merged' && device.status !== 'retired'"><sl-button class="small" variant="danger" :loading="retiring" @click="retireDevice(device.deviceId)">删除设备</sl-button></template>
+                <template x-if="device.status === 'retired'"><sl-button class="small" :loading="restoringDevice" @click="restoreDevice(device.deviceId)">恢复</sl-button></template>
+              </div>
             </article>
           </template>
         </div>
@@ -1024,11 +1029,11 @@ document.addEventListener('alpine:init', function () {
       sessionDetailMode: false, detail: null, detailOffset: 0,
       messageSearch: '', roleFilter: '',
       // devices
-      devices: [], deviceStatus: 'current', deviceSearch: '', selectedDevices: new Set(), deviceMergeTarget: '',
+      devices: [], deviceStatus: 'current', deviceSearch: '', selectedDevices: new Set(), deviceMergeTarget: '', retiring: false,
       // conflicts
       conflicts: [], conflictFilter: 'open', conflictSearch: '',
       activeConflict: null, resolution: 'keep-a', manualContent: '',
-      resolving: false, deleting: false, merging: false,
+      resolving: false, deleting: false, merging: false, restoringDevice: false,
       _recent: [], _trendCaption: '等待数据', messageExpanded: {},
       // ui
       theme: 'system', currency: 'cny', autoRefresh: false,
@@ -1246,7 +1251,7 @@ document.addEventListener('alpine:init', function () {
         return [
           { view: 'overview', label: '用量总览', icon: 'activity', badge: null },
           { view: 'sessions', label: '会话', icon: 'messages-square', badge: (this.loadedViews.overview || this.loadedViews.sessions) ? this.fmtNum(this.activeSessionTotal) : '–' },
-          { view: 'devices', label: '设备', icon: 'monitor', badge: this.loadedViews.devices ? this.fmtNum(this.devices.filter(d => d.status !== 'merged').length) : '–' },
+          { view: 'devices', label: '设备', icon: 'monitor', badge: this.loadedViews.devices ? this.fmtNum(this.devices.filter(d => d.status !== 'merged' && d.status !== 'retired').length) : '–' },
           { view: 'conflicts', label: '冲突', icon: 'git-merge', badge: this.loadedViews.conflicts ? this.fmtNum(open) : '–', alert: open > 0 }
         ];
       },
@@ -1433,16 +1438,18 @@ document.addEventListener('alpine:init', function () {
       get deviceRows() {
         const q = (this.deviceSearch || '').trim().toLowerCase();
         return this.devices.map(d => Object.assign({}, d, { online: Date.now() - d.lastSeen < 5 * 60 * 1000 })).filter(d => {
-          if (this.deviceStatus === 'current' && d.status === 'merged') return false;
+          if (this.deviceStatus === 'current' && (d.status === 'merged' || d.status === 'retired')) return false;
           if (this.deviceStatus !== 'current' && this.deviceStatus !== 'all' && d.status !== this.deviceStatus) return false;
           if (!q) return true;
           return [d.name, d.platform, d.deviceId, d.piVersion, d.extensionVersion].some(v => String(v || '').toLowerCase().indexOf(q) >= 0);
         });
       },
-      get mergeTargets() { return this.devices.filter(d => d.status !== 'merged' && !this.selectedDevices.has(d.deviceId)); },
+      get mergeTargets() { return this.devices.filter(d => d.status !== 'merged' && d.status !== 'retired' && !this.selectedDevices.has(d.deviceId)); },
       get deviceSummary() {
         const online = this.devices.filter(d => d.status === 'active' && Date.now() - d.lastSeen < 5 * 60 * 1000).length;
-        return online + ' 台最近在线 · 共 ' + this.devices.length + ' 台 · 已选 ' + this.selectedDevices.size + ' 台';
+        const retired = this.devices.filter(d => d.status === 'retired').length;
+        const active = this.devices.filter(d => d.status !== 'retired').length;
+        return online + ' 台最近在线 · 共 ' + active + ' 台 · 已选 ' + this.selectedDevices.size + ' 台' + (retired ? ' · 已删除 ' + retired + ' 台' : '');
       },
       toggleSelectDevice(id, on) { const next = new Set(this.selectedDevices); if (on) { next.add(id); if (this.deviceMergeTarget === id) this.deviceMergeTarget = ''; } else next.delete(id); this.selectedDevices = next; },
       async renameDevice(id) {
@@ -1476,6 +1483,34 @@ document.addEventListener('alpine:init', function () {
           this.toast('设备历史已永久合并', 'success');
         } catch (e) { this.toast('设备合并失败：' + e.message, 'error'); }
         finally { this.merging = false; }
+      },
+      async retireDevice(id) {
+        const device = this.devices.find(d => d.deviceId === id);
+        if (!device || device.status === 'merged' || device.status === 'retired') return;
+        const warning = '删除后设备将从列表移除，其历史用量在统计中归并到「其他设备」，会话内容保留。\n若该设备之后再次心跳，仍保持删除状态（可在状态筛选「已删除」中查看或恢复）。';
+        const typed = window.prompt(warning + '\n\n请输入设备名“' + device.name + '”确认删除：', '');
+        if (typed == null) return;
+        if (typed !== device.name) { this.toast('设备名不匹配，已取消删除', 'error'); return; }
+        this.retiring = true;
+        try {
+          const result = await this.api('/api/v1/devices/' + encodeURIComponent(id), { method: 'DELETE', body: JSON.stringify({ confirmName: typed }) });
+          this.devices = await this.api('/api/v1/devices');
+          this.stats = await this.api(this.statsPath());
+          this.renderTrend(); this.refreshIcons();
+          this.toast('设备已删除；' + result.affected.usageRows + ' 条用量的统计已归并到「其他设备」', 'success');
+        } catch (e) { this.toast('删除设备失败：' + e.message, 'error'); }
+        finally { this.retiring = false; }
+      },
+      async restoreDevice(id) {
+        this.restoringDevice = true;
+        try {
+          await this.api('/api/v1/devices/' + encodeURIComponent(id) + '/restore', { method: 'POST', body: JSON.stringify({}) });
+          this.devices = await this.api('/api/v1/devices');
+          this.stats = await this.api(this.statsPath());
+          this.renderTrend(); this.refreshIcons();
+          this.toast('设备已恢复，统计重新按设备展示', 'success');
+        } catch (e) { this.toast('恢复设备失败：' + e.message, 'error'); }
+        finally { this.restoringDevice = false; }
       },
 
       // ============ conflicts ============

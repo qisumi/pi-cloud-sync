@@ -11,9 +11,10 @@ interface DeviceRow {
   ext_version: string;
   last_seen: number;
   created_at: number;
-  status: "active" | "legacy" | "merged";
+  status: "active" | "legacy" | "merged" | "retired";
   merged_into: string | null;
   merged_at: number | null;
+  retired_at: number | null;
   is_legacy: number;
   name_locked: number;
 }
@@ -104,14 +105,22 @@ export function registerDeviceRoutes(app: FastifyInstance, dbs: SyncDb) {
       existing = dbs.db.prepare(`SELECT * FROM devices WHERE device_id = ?`).get(deviceId) as DeviceRow;
     } else {
       reactivated = existing.status === "merged";
-      const name = existing.name_locked === 1 && !reactivated ? existing.name : requestedName;
-      dbs.db
-        .prepare(
-          `UPDATE devices SET name = ?, platform = ?, pi_version = ?, ext_version = ?, last_seen = ?,
+      if (existing.status === "retired") {
+        // 已删除（退役）设备：保持退役状态，不复活、不改名，只刷新心跳与版本信息；
+        // 若确需恢复，在 Web 控制台「已退役」筛选中手动恢复。
+        dbs.db
+          .prepare(`UPDATE devices SET platform = ?, pi_version = ?, ext_version = ?, last_seen = ? WHERE device_id = ?`)
+          .run(platform, piVersion, extVersion, nowMs, deviceId);
+      } else {
+        const name = existing.name_locked === 1 && !reactivated ? existing.name : requestedName;
+        dbs.db
+          .prepare(
+            `UPDATE devices SET name = ?, platform = ?, pi_version = ?, ext_version = ?, last_seen = ?,
              status = 'active', merged_into = NULL, merged_at = NULL, is_legacy = 0
            WHERE device_id = ?`,
-        )
-        .run(name, platform, piVersion, extVersion, nowMs, deviceId);
+          )
+          .run(name, platform, piVersion, extVersion, nowMs, deviceId);
+      }
     }
     const row = dbs.db.prepare(`SELECT name FROM devices WHERE device_id = ?`).get(deviceId) as { name: string };
     return { ok: true, data: { deviceId, name: row.name, lastSeen: nowMs, reactivated } };
@@ -127,7 +136,7 @@ export function registerDeviceRoutes(app: FastifyInstance, dbs: SyncDb) {
            (SELECT COUNT(*) FROM session_entries e WHERE e.source_device_id = d.device_id) AS entry_count,
            (SELECT COALESCE(SUM(total_tokens), 0) FROM session_usage u WHERE u.source_device_id = d.device_id) AS total_tokens,
            (SELECT COALESCE(SUM(cost), 0) FROM session_usage u WHERE u.source_device_id = d.device_id) AS total_cost
-         FROM devices d ORDER BY CASE d.status WHEN 'active' THEN 0 WHEN 'legacy' THEN 1 ELSE 2 END, d.last_seen DESC`,
+         FROM devices d ORDER BY CASE d.status WHEN 'active' THEN 0 WHEN 'legacy' THEN 1 WHEN 'retired' THEN 2 ELSE 3 END, d.last_seen DESC`,
       )
       .all() as Array<DeviceRow & { session_count: number; entry_count: number; total_tokens: number; total_cost: number }>;
     return {
@@ -143,6 +152,7 @@ export function registerDeviceRoutes(app: FastifyInstance, dbs: SyncDb) {
         status: row.status,
         mergedInto: row.merged_into,
         mergedAt: row.merged_at,
+        retiredAt: row.retired_at ?? null,
         isLegacy: row.is_legacy === 1,
         sessionCount: row.session_count,
         entryCount: row.entry_count,
@@ -160,6 +170,50 @@ export function registerDeviceRoutes(app: FastifyInstance, dbs: SyncDb) {
       .run(name, req.params.id);
     if (result.changes === 0) return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "device not found" });
     return { ok: true, data: { deviceId: req.params.id, name } };
+  });
+
+  app.delete<{ Params: { id: string }; Body: { confirmName?: unknown } }>("/api/v1/devices/:id", async (req, reply) => {
+    const row = dbs.db.prepare(`SELECT * FROM devices WHERE device_id = ?`).get(req.params.id) as DeviceRow | undefined;
+    if (!row) return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "device not found" });
+    if (row.status === "merged") {
+      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "merged device is already hidden from lists" });
+    }
+    const confirmName = typeof req.body?.confirmName === "string" ? req.body.confirmName : "";
+    if (confirmName !== row.name) {
+      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "device name confirmation mismatch" });
+    }
+    const affected = {
+      sessions: (
+        dbs.db
+          .prepare(
+            `SELECT COUNT(DISTINCT h.uuid) AS count FROM session_headers h
+             WHERE h.updated_by_device_id = ?
+                OR h.uuid IN (SELECT e.session_uuid FROM session_entries e WHERE e.source_device_id = ?)`,
+          )
+          .get(row.device_id, row.device_id) as { count: number }
+      ).count,
+      entries: (dbs.db.prepare(`SELECT COUNT(*) AS count FROM session_entries WHERE source_device_id = ?`).get(row.device_id) as { count: number }).count,
+      usageRows: (dbs.db.prepare(`SELECT COUNT(*) AS count FROM session_usage WHERE source_device_id = ?`).get(row.device_id) as { count: number }).count,
+    };
+    const retiredAt = now();
+    // 退役不迁移历史行：会话/条目/用量保留原 device_id，统计侧统一归并到「其他设备」；
+    // 之后若该设备再次心跳，保持退役状态，不会重新出现在设备列表。
+    dbs.db.prepare(`UPDATE devices SET status = 'retired', retired_at = ? WHERE device_id = ?`).run(retiredAt, row.device_id);
+    return { ok: true, data: { deviceId: row.device_id, name: row.name, retiredAt, affected } };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/v1/devices/:id/restore", async (req, reply) => {
+    const row = dbs.db.prepare(`SELECT * FROM devices WHERE device_id = ?`).get(req.params.id) as DeviceRow | undefined;
+    if (!row) return reply.code(404).send({ ok: false, error: "NOT_FOUND", message: "device not found" });
+    if (row.status !== "retired") {
+      return reply.code(400).send({ ok: false, error: "BAD_REQUEST", message: "only retired devices can be restored" });
+    }
+    dbs.db
+      .prepare(
+        `UPDATE devices SET status = CASE WHEN is_legacy = 1 THEN 'legacy' ELSE 'active' END, retired_at = NULL WHERE device_id = ?`,
+      )
+      .run(row.device_id);
+    return { ok: true, data: { deviceId: row.device_id, name: row.name, restoredAt: now() } };
   });
 
   app.post<{ Body: MergeBody }>("/api/v1/devices/merge/preview", async (req, reply) => {
