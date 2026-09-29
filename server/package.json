@@ -21,7 +21,7 @@
   "dependencies": {
     "@fastify/compress": "^8.3.1",
     "@pi-cloud-sync/shared": "*",
-    "better-sqlite3": "^11.5.0",
+    "better-sqlite3": "13.0.3",
     "fastify": "^5.11.2"
   },
   "devDependencies": {

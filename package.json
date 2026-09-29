@@ -21,7 +21,7 @@
     "pm2:logs": "npm run pm2:logs --workspace=server"
   },
   "allowScripts": {
-    "better-sqlite3@11.10.0": true,
+    "better-sqlite3@13.0.3": true,
     "esbuild@0.28.1": true
   }
 }
