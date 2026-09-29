@@ -4,3 +4,6 @@ dist/
 .env
 data/
 logs/
+
+# 本地运维记录（含服务器内网信息，禁止提交）
+docs/*.local.md
