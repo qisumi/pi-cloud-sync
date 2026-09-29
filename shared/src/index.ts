@@ -38,8 +38,8 @@ export interface PushChange {
 export interface JsonFieldChange {
   /** 点路径，如 "theme"、"compaction.enabled" */
   path: string;
-  /** JSON 字符串值 */
-  valueJson: string;
+  /** JSON 字符串值；**null = 删除该路径**（真实的 JSON null 值传字符串 "null"，二者无歧义） */
+  valueJson: string | null;
   /** 客户端本地字段版本（客户端递增计数） */
   version: number;
 }

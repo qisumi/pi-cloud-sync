@@ -347,6 +347,92 @@ test("auth required", async (t) => {
   assert.equal(res.status, 401);
 });
 
+test("config field deletion push (valueJson null) does not 500 and removes the field", async (t) => {
+  // 回归：删除字段曾发 valueJson: undefined → JSON 序列化丢字段 → 服务端 NOT NULL 约束 500
+  const ctx = await boot();
+  t.after(async () => { await ctx.stop(); });
+  const models1 = JSON.stringify({ providers: { a: { id: "a" }, b: { id: "b" } } });
+  const models2 = JSON.stringify({ providers: { a: { id: "a" } } }); // b 被删除
+
+  const push = await fetch(`${ctx.base}/api/v1/sync/push`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({
+      changes: [
+        {
+          kind: "config",
+          key: "config/models.json",
+          baseSha256: null,
+          sha256: "sha-a",
+          contentB64: b64(models1),
+          mtime: Date.now(),
+          jsonFields: [
+            { path: "providers.a.id", valueJson: JSON.stringify("a"), version: 1 },
+            { path: "providers.b.id", valueJson: JSON.stringify("b"), version: 1 },
+          ],
+        },
+      ],
+    }),
+  });
+  const p1 = (await push.json()) as { data: { objects: Array<{ version: number; sha256: string }> } };
+  assert.equal(push.status, 200);
+  const baseSha = p1.data.objects[0].sha256;
+
+  // fast-forward 推送删除（b 的两个叶子路径发 valueJson: null）
+  const pushDel = await fetch(`${ctx.base}/api/v1/sync/push`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({
+      changes: [
+        {
+          kind: "config",
+          key: "config/models.json",
+          baseSha256: baseSha,
+          sha256: "sha-b",
+          contentB64: b64(models2),
+          mtime: Date.now(),
+          jsonFields: [{ path: "providers.b.id", valueJson: null, version: 2 }],
+        },
+      ],
+    }),
+  });
+  assert.equal(pushDel.status, 200);
+  const p2 = (await pushDel.json()) as { data: { objects: Array<{ contentB64: string; fieldVersions: Array<{ path: string }> }> } };
+  const merged = JSON.parse(Buffer.from(p2.data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.deepEqual(merged, { providers: { a: { id: "a" } } });
+  // 已删除字段不出现在响应 fieldVersions 里
+  assert.ok(!p2.data.objects[0].fieldVersions.some((f) => f.path === "providers.b.id"));
+  assert.ok(p2.data.objects[0].fieldVersions.some((f) => f.path === "providers.a.id"));
+
+  // 并发字段级合并中的删除：版本高于服务器时采纳删除
+  const models3 = JSON.stringify({ providers: { a: { id: "a2" } } });
+  const pushConcurrent = await fetch(`${ctx.base}/api/v1/sync/push`, {
+    method: "POST",
+    headers: headers(ctx),
+    body: JSON.stringify({
+      changes: [
+        {
+          kind: "config",
+          key: "config/models.json",
+          baseSha256: "stale-sha",
+          sha256: "sha-c",
+          contentB64: b64(models3),
+          mtime: Date.now(),
+          jsonFields: [
+            { path: "providers.a.id", valueJson: JSON.stringify("a2"), version: 5 },
+            { path: "providers.b.id", valueJson: null, version: 6 },
+          ],
+        },
+      ],
+    }),
+  });
+  assert.equal(pushConcurrent.status, 200);
+  const p3 = (await pushConcurrent.json()) as { data: { objects: Array<{ contentB64: string }> } };
+  const merged3 = JSON.parse(Buffer.from(p3.data.objects[0].contentB64, "base64").toString("utf8"));
+  assert.equal(merged3.providers.a.id, "a2");
+  assert.ok(!("b" in merged3.providers));
+});
+
 test("config push + fast-forward + pull", async (t) => {
   const ctx = await boot();
   t.after(async () => { await ctx.stop(); });

@@ -8,7 +8,8 @@ export type ObjectKind = "config" | "plugin-file" | "package-manifest";
 
 export interface JsonFieldChange {
   path: string;
-  valueJson: string;
+  /** JSON 字符串值；null = 删除该路径（真实 JSON null 值传字符串 "null"） */
+  valueJson: string | null;
   version: number;
 }
 

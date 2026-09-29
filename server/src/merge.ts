@@ -43,6 +43,19 @@ export function setByPath(obj: Record<string, unknown>, path: string, value: unk
   return JSON.stringify(prev) !== JSON.stringify(value);
 }
 
+/** 按点路径删除叶子字段；路径不存在时静默返回 */
+export function unsetByPath(obj: Record<string, unknown>, path: string): void {
+  const parts = path.split(".");
+  let cur: unknown = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur === null || typeof cur !== "object") return;
+    cur = (cur as Record<string, unknown>)[parts[i]];
+  }
+  if (cur !== null && typeof cur === "object") {
+    delete (cur as Record<string, unknown>)[parts[parts.length - 1]];
+  }
+}
+
 /** 收集对象中所有叶子字段的点路径（用于全量替换时初始化字段版本） */
 export function collectLeafPaths(obj: unknown, prefix = ""): string[] {
   if (obj === null || obj === undefined) return [];
@@ -154,6 +167,7 @@ function createObject(
   // 记录字段版本：若客户端提供了字段变更则用之，否则从内容中推导（version=1）
   if (change.jsonFields && change.jsonFields.length > 0) {
     for (const f of change.jsonFields) {
+      if (f.valueJson == null) continue; // 新建对象无删除语义，跳过删除标记
       db.prepare(
         `INSERT INTO config_field_versions (object_key, path, version, value, updated_by, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -223,7 +237,15 @@ function applyFastForward(
          updated_by = excluded.updated_by,
          updated_at = excluded.updated_at`,
     );
+    const removeField = db.prepare(
+      `DELETE FROM config_field_versions WHERE object_key = ? AND path = ?`,
+    );
     for (const f of change.jsonFields) {
+      if (f.valueJson == null) {
+        // valueJson null = 删除该字段（真实 JSON null 值是字符串 "null"，不会误伤）
+        removeField.run(change.key, f.path);
+        continue;
+      }
       upsert.run(change.key, f.path, f.version, f.valueJson, deviceName, nowMs);
       fieldVersions.push({ path: f.path, version: f.version, updatedBy: deviceName, updatedAt: nowMs });
     }
@@ -310,6 +332,29 @@ function mergeJsonFields(
         updatedBy: sf!.updated_by,
         updatedAt: sf!.updated_at,
       });
+      continue;
+    }
+
+    if (cf.valueJson == null) {
+      // 客户端声明删除该字段
+      if (!sf) continue; // 服务器已无此字段，无需处理
+      if (cf.version > sf.version) {
+        db.prepare(`DELETE FROM config_field_versions WHERE object_key = ? AND path = ?`).run(change.key, path);
+        unsetByPath(serverObj, path);
+        // 已删除字段不进 accepted（响应 fieldVersions 不含它，客户端状态自然清除）
+      } else {
+        // 服务器版本更新或同级：服务器胜出，客户端删除意图记为冲突
+        accepted.push({ path, version: sf.version, updatedBy: sf.updated_by, updatedAt: sf.updated_at });
+        conflicts.push({
+          objectKey: change.key,
+          path,
+          kind: change.kind,
+          deviceA: deviceName,
+          deviceB: sf.updated_by,
+          contentA: "(deleted)",
+          contentB: readFieldValue(path),
+        });
+      }
       continue;
     }
 
@@ -509,6 +554,27 @@ function mergeAuthJson(
       continue;
     }
     if (clientEntry === undefined) {
+      const cfDel = clientFields.get(provider);
+      if (cfDel && cfDel.valueJson == null && clientV > serverV && serverV > 0) {
+        // 客户端删除提供商且版本更高 → 采纳删除（不加入 result）
+        db.prepare(`DELETE FROM config_field_versions WHERE object_key = ? AND path = ?`).run(change.key, provider);
+        changed = true;
+        continue;
+      }
+      if (cfDel && cfDel.valueJson == null && serverV > 0) {
+        // 服务器版本更新 → 保留服务器，客户端删除意图记为冲突
+        result[provider] = serverEntry;
+        conflicts.push({
+          objectKey: change.key,
+          path: provider,
+          kind: change.kind,
+          deviceA: deviceName,
+          deviceB: sf?.updated_by ?? "unknown",
+          contentA: "(deleted)",
+          contentB: JSON.stringify(serverEntry),
+        });
+        continue;
+      }
       // 服务器独有 → 保留
       result[provider] = serverEntry;
       continue;
@@ -624,6 +690,7 @@ function applyClientField(
   deviceName: string,
   nowMs: number,
 ) {
+  if (f.valueJson == null) return; // 删除标记不走 upsert（调用点已过滤，此处兜底）
   upsert.run(objectKey, f.path, f.version, f.valueJson, deviceName, nowMs);
 }
 
@@ -695,9 +762,12 @@ function mergeWholeFileLww(
 function decodeContent(change: PushChange): string {
   if (change.contentB64) return Buffer.from(change.contentB64, "base64").toString("utf8");
   if (change.jsonFields) {
-    // 由字段重建 JSON（近似；客户端一般会同时给 contentB64）
+    // 由字段重建 JSON（近似；客户端一般会同时给 contentB64）。删除标记（valueJson null）跳过
     const obj: Record<string, unknown> = {};
-    for (const f of change.jsonFields) setByPath(obj, f.path, JSON.parse(f.valueJson));
+    for (const f of change.jsonFields) {
+      if (f.valueJson == null) continue;
+      setByPath(obj, f.path, JSON.parse(f.valueJson));
+    }
     return JSON.stringify(obj);
   }
   return "";

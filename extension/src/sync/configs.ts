@@ -132,7 +132,7 @@ function diffJsonFields(
   // auth.json：按提供商原子合并
   if (file && file.endsWith("auth.json")) {
     const providers = new Set([...Object.keys(prev ?? {}), ...Object.keys(cur)]);
-    const fields: Array<{ path: string; valueJson: string; version: number }> = [];
+    const fields: Array<{ path: string; valueJson: string | null; version: number }> = [];
     for (const p of providers) {
       const prevVal = (prev as Record<string, unknown> | undefined)?.[p];
       const curVal = cur[p];
@@ -141,8 +141,10 @@ function diffJsonFields(
       if (prevJson === curJson) continue;
       const known = st.fields[p];
       const version = (known?.version ?? 0) + 1;
-      fields.push({ path: p, valueJson: JSON.stringify(curVal), version });
-      st.fields[p] = { version, value: JSON.stringify(curVal) };
+      // curVal undefined = 字段被本地删除：发 null 标记（JSON.stringify(undefined) 会返回 undefined，
+      // JSON 序列化时字段被丢弃，服务端会绑定为 NULL 而违反约束）
+      fields.push({ path: p, valueJson: curVal === undefined ? null : JSON.stringify(curVal), version });
+      st.fields[p] = { version, value: curVal === undefined ? "null" : JSON.stringify(curVal) };
     }
     return fields;
   }
@@ -151,7 +153,7 @@ function diffJsonFields(
   const curPaths = new Set(collectLeafPaths(cur));
   const all = new Set([...prevPaths, ...curPaths]);
 
-  const fields: Array<{ path: string; valueJson: string; version: number }> = [];
+  const fields: Array<{ path: string; valueJson: string | null; version: number }> = [];
   for (const path of all) {
     const prevVal = getByPath(prev, path);
     const curVal = getByPath(cur, path);
@@ -160,16 +162,19 @@ function diffJsonFields(
     if (prevJson === curJson) continue;
     const known = st.fields[path];
     const version = (known?.version ?? 0) + 1;
-    fields.push({ path, valueJson: JSON.stringify(curVal), version });
-    st.fields[path] = { version, value: JSON.stringify(curVal) };
+    // 字段被删除（curVal undefined）时发 null 标记，服务端按删除处理；
+    // 直接 JSON.stringify(undefined) 会得到 undefined，请求体序列化后丢字段导致服务端 500
+    fields.push({ path, valueJson: curVal === undefined ? null : JSON.stringify(curVal), version });
+    st.fields[path] = { version, value: curVal === undefined ? "null" : JSON.stringify(curVal) };
   }
   return fields;
 }
 
-/** 从字段版本表中重建上次推送的 JSON（便于 diff） */
+/** 从字段版本表中重建上次推送的 JSON（便于 diff）；value 为 null/"null"/非法 JSON 的哨兵（已删除字段）跳过 */
 function loadPrevJson(st: { fields: Record<string, { version: number; value: string }> }): Record<string, unknown> {
   const obj: Record<string, unknown> = {};
   for (const [path, f] of Object.entries(st.fields)) {
+    if (f.value == null || f.value === "null") continue;
     try {
       setByPath(obj, path, JSON.parse(f.value));
     } catch {
